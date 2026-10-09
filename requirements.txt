@@ -1,0 +1,8 @@
+
+streamlit
+pillow
+numpy
+pandas
+requests
+gTTS
+tensorflow
