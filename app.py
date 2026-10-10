@@ -19,7 +19,7 @@ st.set_page_config(
 # ---------------- AGRICULTURE BACKGROUND ----------------
 
 def add_agriculture_background():
-    image_path = Path("farm_background.jpg")
+    image_path = Path("farm_backgroundjpg.png")
 
     if image_path.exists():
         image_data = base64.b64encode(
