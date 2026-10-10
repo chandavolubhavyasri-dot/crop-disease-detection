@@ -1,23 +1,14 @@
 
-import io
+import base64
 import json
-import os
 from datetime import datetime
+from pathlib import Path
 
-import numpy as np
-import pandas as pd
-import requests
 import streamlit as st
 from PIL import Image
 from gtts import gTTS
 
-try:
-    import tensorflow as tf
-except ImportError:
-    tf = None
-
-
-# =============== PAGE CONFIGURATION ===============
+# ---------------- PAGE SETTINGS ----------------
 
 st.set_page_config(
     page_title="CropCare AI",
@@ -25,593 +16,524 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🌱 CropCare AI")
-st.subheader("AI Crop Health & Multilingual Farmer Assistance")
-st.write(
-    "A farmer-friendly prototype for leaf analysis, disease education, "
-    "weather awareness and voice assistance."
-)
+# ---------------- AGRICULTURE BACKGROUND ----------------
 
-# =============== LANGUAGES ===============
+def add_agriculture_background():
+    image_path = Path("farm_background.jpg")
+
+    if image_path.exists():
+        image_data = base64.b64encode(
+            image_path.read_bytes()
+        ).decode("utf-8")
+
+        background_css = f"""
+        <style>
+        .stApp {{
+            background-image:
+                linear-gradient(
+                    rgba(245, 250, 239, 0.88),
+                    rgba(245, 250, 239, 0.88)
+                ),
+                url("data:image/jpeg;base64,{image_data}");
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+        }}
+
+        [data-testid="stSidebar"] {{
+            background-color: rgba(20, 80, 45, 0.96);
+        }}
+
+        [data-testid="stSidebar"] * {{
+            color: white;
+        }}
+
+        h1, h2, h3 {{
+            color: #145c35;
+        }}
+
+        div[data-testid="stMetric"] {{
+            background-color: rgba(255, 255, 255, 0.82);
+            border: 1px solid #d7e8d0;
+            padding: 14px;
+            border-radius: 12px;
+        }}
+
+        div[data-testid="stVerticalBlockBorderWrapper"] {{
+            border-radius: 14px;
+        }}
+
+        .stButton > button {{
+            border-radius: 10px;
+            font-weight: 600;
+        }}
+        </style>
+        """
+    else:
+        background_css = """
+        <style>
+        .stApp {
+            background: linear-gradient(
+                135deg, #f4f9ed, #e1f0d9
+            );
+        }
+        h1, h2, h3 {
+            color: #145c35;
+        }
+        </style>
+        """
+
+    st.markdown(background_css, unsafe_allow_html=True)
+
+
+add_agriculture_background()
+
+# ---------------- LANGUAGES ----------------
 
 LANGUAGES = {
-    "English": {"tts": "en", "message":
-        "Please check your crop regularly. If you suspect a disease, "
-        "consult an agricultural expert before treatment."},
-    "Hindi": {"tts": "hi", "message":
-        "अपनी फसल की नियमित जाँच करें। बीमारी का संदेह होने पर उपचार से पहले कृषि विशेषज्ञ से सलाह लें।"},
-    "Telugu": {"tts": "te", "message":
-        "మీ పంటను క్రమం తప్పకుండా పరిశీలించండి. వ్యాధి అనుమానం ఉంటే చికిత్సకు ముందు వ్యవసాయ నిపుణుడిని సంప్రదించండి."},
-    "Tamil": {"tts": "ta", "message":
-        "பயிரைத் தொடர்ந்து கண்காணிக்கவும். நோய் இருப்பதாக சந்தேகித்தால் சிகிச்சைக்கு முன் வேளாண் நிபுணரை அணுகவும்."},
-    "Kannada": {"tts": "kn", "message":
-        "ಬೆಳೆಯನ್ನು ನಿಯಮಿತವಾಗಿ ಪರಿಶೀಲಿಸಿ. ರೋಗದ ಅನುಮಾನವಿದ್ದರೆ ಚಿಕಿತ್ಸೆಗೂ ಮೊದಲು ಕೃಷಿ ತಜ್ಞರನ್ನು ಸಂಪರ್ಕಿಸಿ."},
-    "Malayalam": {"tts": "ml", "message":
-        "വിള പതിവായി പരിശോധിക്കുക. രോഗം സംശയിക്കുന്നുവെങ്കിൽ ചികിത്സയ്ക്ക് മുമ്പ് കാർഷിക വിദഗ്ധനെ സമീപിക്കുക."},
-    "Bengali": {"tts": "bn", "message":
-        "নিয়মিত ফসল পরীক্ষা করুন। রোগের সন্দেহ হলে চিকিৎসার আগে কৃষি বিশেষজ্ঞের পরামর্শ নিন।"},
-    "Marathi": {"tts": "mr", "message":
-        "पिकाची नियमित तपासणी करा. रोगाचा संशय असल्यास उपचारापूर्वी कृषी तज्ज्ञांचा सल्ला घ्या."},
-    "Gujarati": {"tts": "gu", "message":
-        "પાકની નિયમિત તપાસ કરો. રોગની શંકા હોય તો સારવાર પહેલાં કૃષિ નિષ્ણાતની સલાહ લો."},
-    "Punjabi": {"tts": "pa", "message":
-        "ਫਸਲ ਦੀ ਨਿਯਮਿਤ ਜਾਂਚ ਕਰੋ। ਬਿਮਾਰੀ ਦਾ ਸ਼ੱਕ ਹੋਵੇ ਤਾਂ ਇਲਾਜ ਤੋਂ ਪਹਿਲਾਂ ਖੇਤੀ ਮਾਹਿਰ ਦੀ ਸਲਾਹ ਲਵੋ."}
-}
-
-# =============== DISEASE REFERENCE LIBRARY ===============
-# General educational information, not a diagnosis.
-
-DISEASES = {
-    "Rice": {
-        "Blast": (
-            "Diamond-shaped leaf lesions, often with grey centres.",
-            "Use locally recommended varieties and balanced crop nutrition.",
-            "Ask an agricultural expert to confirm the disease."
-        ),
-        "Bacterial leaf blight": (
-            "Yellowing or drying may begin at leaf tips or edges.",
-            "Use healthy seed and locally recommended varieties.",
-            "Seek local confirmation before choosing treatment."
-        ),
-        "Brown spot": (
-            "Brown oval spots can develop on leaves.",
-            "Use healthy seed and maintain balanced nutrition.",
-            "Consult an agricultural expert about management."
-        )
+    "English": {
+        "code": "en",
+        "message": "Please check the crop carefully and consult an agricultural expert before using any pesticide."
     },
-    "Tomato": {
-        "Early blight": (
-            "Dark spots may develop concentric rings and yellowing.",
-            "Rotate crops and remove infected plant debris appropriately.",
-            "Confirm the disease before selecting a registered treatment."
-        ),
-        "Late blight": (
-            "Water-soaked dark lesions may spread rapidly in wet conditions.",
-            "Monitor plants frequently and avoid prolonged leaf wetness.",
-            "Seek prompt local agricultural advice if suspected."
-        ),
-        "Bacterial spot": (
-            "Small dark spots may affect leaves and fruit.",
-            "Use healthy planting material and avoid handling wet plants.",
-            "Get expert confirmation before choosing control measures."
-        ),
-        "Yellow leaf curl": (
-            "Leaves may curl, yellow and become smaller.",
-            "Monitor whiteflies and use recommended integrated pest management.",
-            "Several causes look similar; ask an expert to confirm."
-        )
+    "Hindi": {
+        "code": "hi",
+        "message": "कृपया फसल की सावधानीपूर्वक जांच करें और कीटनाशक का उपयोग करने से पहले कृषि विशेषज्ञ से सलाह लें।"
     },
-    "Chilli": {
-        "Anthracnose": (
-            "Sunken dark lesions may develop on fruit.",
-            "Use healthy planting material and remove affected fruit appropriately.",
-            "Confirm locally before choosing treatment."
-        ),
-        "Leaf curl": (
-            "Leaves may curl or become distorted and plants may be stunted.",
-            "Monitor insect vectors and follow local crop advice.",
-            "Confirm the cause before treatment."
-        )
+    "Telugu": {
+        "code": "te",
+        "message": "దయచేసి పంటను జాగ్రత్తగా పరిశీలించి, పురుగుమందులు వాడే ముందు వ్యవసాయ నిపుణుడిని సంప్రదించండి."
     },
-    "Cotton": {
-        "Bacterial blight": (
-            "Angular dark lesions may affect leaves, stems or bolls.",
-            "Use healthy seed and locally recommended varieties.",
-            "Consult an agricultural expert for confirmation."
-        ),
-        "Cotton leaf curl": (
-            "Leaves may curl upward and show vein thickening.",
-            "Monitor whiteflies and follow regional integrated pest management advice.",
-            "Seek expert confirmation before treatment."
-        )
+    "Tamil": {
+        "code": "ta",
+        "message": "பயிரை கவனமாக பரிசோதித்து, பூச்சிக்கொல்லி பயன்படுத்துவதற்கு முன்பு வேளாண் நிபுணரை அணுகவும்."
     },
-    "Maize": {
-        "Northern leaf blight": (
-            "Long, cigar-shaped lesions can develop on leaves.",
-            "Use locally recommended varieties and rotate crops where practical.",
-            "Confirm the disease with an agricultural expert."
-        ),
-        "Common rust": (
-            "Reddish-brown raised pustules may appear on leaves.",
-            "Monitor fields and use recommended resistant varieties.",
-            "Ask an expert to assess severity."
-        )
+    "Bengali": {
+        "code": "bn",
+        "message": "ফসলটি ভালোভাবে পরীক্ষা করুন এবং কীটনাশক ব্যবহারের আগে কৃষি বিশেষজ্ঞের পরামর্শ নিন।"
     },
-    "Potato": {
-        "Early blight": (
-            "Brown leaf spots may show target-like rings.",
-            "Rotate crops and remove infected debris appropriately.",
-            "Confirm the disease before treatment."
-        ),
-        "Late blight": (
-            "Dark, water-soaked lesions can spread quickly in wet weather.",
-            "Monitor fields and remove infected material safely.",
-            "Contact an agricultural officer promptly if suspected."
-        )
+    "Kannada": {
+        "code": "kn",
+        "message": "ಬೆಳೆಯನ್ನು ಎಚ್ಚರಿಕೆಯಿಂದ ಪರಿಶೀಲಿಸಿ ಮತ್ತು ಕೀಟನಾಶಕ ಬಳಸುವ ಮೊದಲು ಕೃಷಿ ತಜ್ಞರನ್ನು ಸಂಪರ್ಕಿಸಿ."
     },
-    "Groundnut": {
-        "Early leaf spot": (
-            "Brown circular leaf spots may have yellow halos.",
-            "Rotate crops and monitor plants regularly.",
-            "Confirm locally before applying a treatment."
-        ),
-        "Late leaf spot": (
-            "Dark leaf spots may develop, sometimes without prominent halos.",
-            "Follow recommended field sanitation and crop rotation.",
-            "Seek expert confirmation and management advice."
-        )
+    "Malayalam": {
+        "code": "ml",
+        "message": "വിള പരിശോധിച്ച ശേഷം കീടനാശിനി ഉപയോഗിക്കുന്നതിന് മുമ്പ് കാർഷിക വിദഗ്ധനെ സമീപിക്കുക."
     },
-    "Wheat": {
-        "Leaf rust": (
-            "Orange-brown pustules may appear on leaf surfaces.",
-            "Use locally recommended resistant varieties and monitor fields.",
-            "Ask an agricultural expert to confirm."
-        ),
-        "Powdery mildew": (
-            "White powder-like patches may appear on leaves.",
-            "Use suitable varieties and avoid excessive nitrogen.",
-            "Seek locally appropriate management advice."
-        )
+    "Marathi": {
+        "code": "mr",
+        "message": "पिकाची काळजीपूर्वक तपासणी करा आणि कीटकनाशक वापरण्यापूर्वी कृषी तज्ज्ञांचा सल्ला घ्या."
+    },
+    "Gujarati": {
+        "code": "gu",
+        "message": "પાકની કાળજીપૂર્વક તપાસ કરો અને જંતુનાશકનો ઉપયોગ કરતા પહેલાં કૃષિ નિષ્ણાતની સલાહ લો."
+    },
+    "Punjabi": {
+        "code": "pa",
+        "message": "ਫਸਲ ਦੀ ਧਿਆਨ ਨਾਲ ਜਾਂਚ ਕਰੋ ਅਤੇ ਕੀਟਨਾਸ਼ਕ ਵਰਤਣ ਤੋਂ ਪਹਿਲਾਂ ਖੇਤੀਬਾੜੀ ਮਾਹਿਰ ਦੀ ਸਲਾਹ ਲਵੋ।"
     }
 }
 
-# =============== MODEL INTEGRATION ===============
-# Required files:
-# model.keras
-# class_names.json
-#
-# class_names.json must contain class labels in exactly the same
-# order as the model's output classes.
-#
-# Example:
-# ["Tomato___Early_blight", "Tomato___healthy", "Rice___Blast"]
-#
-# The preprocessing below assumes RGB pixels scaled to 0..1.
-# Change it if your model was trained differently.
+# ---------------- CROP PROTECTION STARTER LIBRARY ----------------
 
-@st.cache_resource
-def load_model():
-    if tf is None or not os.path.exists("model.keras"):
-        return None
-    try:
-        return tf.keras.models.load_model("model.keras")
-    except Exception:
-        return None
-
-
-def load_labels():
-    if not os.path.exists("class_names.json"):
-        return []
-    try:
-        with open("class_names.json", "r", encoding="utf-8") as f:
-            labels = json.load(f)
-        return labels if isinstance(labels, list) else []
-    except Exception:
-        return []
-
-
-def predict_image(image):
-    model = load_model()
-    labels = load_labels()
-
-    if model is None or not labels:
-        return None
-
-    try:
-        shape = model.input_shape
-        height = int(shape[1] or 224)
-        width = int(shape[2] or 224)
-
-        image = image.convert("RGB").resize((width, height))
-        pixels = np.asarray(image, dtype=np.float32) / 255.0
-        pixels = np.expand_dims(pixels, axis=0)
-
-        output = np.asarray(model.predict(pixels, verbose=0)).reshape(-1)
-
-        if len(output) != len(labels) or len(output) == 0:
-            return None
-
-        # This assumes model outputs class probabilities.
-        # For logits, apply the correct softmax for your model.
-        index = int(np.argmax(output))
-        confidence = float(output[index])
-
-        return {
-            "label": str(labels[index]),
-            "confidence": confidence
+DISEASES = {
+    "Rice": {
+        "Rice Blast": {
+            "signs": "Spindle-shaped spots with grey or whitish centres and dark borders on leaves.",
+            "prevention": "Use healthy seed, avoid excessive nitrogen, maintain suitable spacing, and remove infected residues.",
+            "source": "TNAU Crop Protection"
+        },
+        "Bacterial Leaf Blight": {
+            "signs": "Water-soaked leaf edges that may turn yellow and dry.",
+            "prevention": "Use suitable resistant varieties, maintain field sanitation, and avoid excessive nitrogen.",
+            "source": "TNAU Crop Protection"
         }
-    except Exception:
-        return None
+    },
+    "Tomato": {
+        "Early Blight": {
+            "signs": "Brown leaf spots that may show circular, target-like rings.",
+            "prevention": "Remove infected leaves, avoid wetting foliage, rotate crops, and maintain good spacing.",
+            "source": "TNAU Crop Protection"
+        },
+        "Leaf Curl": {
+            "signs": "Leaves may curl upward or downward, become smaller, and show stunted growth.",
+            "prevention": "Monitor whiteflies, remove severely affected plants when appropriate, and use recommended resistant varieties.",
+            "source": "TNAU Crop Protection"
+        }
+    },
+    "Chilli": {
+        "Anthracnose / Fruit Rot": {
+            "signs": "Sunken dark lesions may appear on fruits.",
+            "prevention": "Use healthy seed, remove infected fruits, improve drainage, and avoid overhead irrigation.",
+            "source": "TNAU Crop Protection"
+        }
+    },
+    "Cotton": {
+        "Cotton Leaf Curl": {
+            "signs": "Leaves may curl, thicken, or show vein swelling.",
+            "prevention": "Monitor whiteflies, remove volunteer cotton plants, and follow local integrated pest management advice.",
+            "source": "TNAU Crop Protection"
+        }
+    },
+    "Maize": {
+        "Fall Armyworm": {
+            "signs": "Leaves may have ragged holes and rows of feeding damage; larvae may be present in the whorl.",
+            "prevention": "Inspect plants regularly, remove egg masses where practical, and follow locally approved integrated pest management guidance.",
+            "source": "TNAU Crop Protection"
+        }
+    },
+    "Potato": {
+        "Late Blight": {
+            "signs": "Dark, water-soaked lesions can spread rapidly in cool, wet conditions.",
+            "prevention": "Use healthy seed tubers, remove infected plants, avoid prolonged leaf wetness, and seek local disease-management advice.",
+            "source": "TNAU Crop Protection"
+        }
+    },
+    "Groundnut": {
+        "Leaf Spot": {
+            "signs": "Brown or dark spots may appear on leaves and cause premature leaf drop.",
+            "prevention": "Rotate crops, remove infected residues where practical, and use recommended varieties and locally approved management methods.",
+            "source": "TNAU Crop Protection"
+        }
+    },
+    "Wheat": {
+        "Rust": {
+            "signs": "Orange, yellow, or dark rust-coloured pustules may appear on leaves or stems.",
+            "prevention": "Grow locally recommended resistant varieties, monitor the crop, and obtain local agricultural advice if symptoms appear.",
+            "source": "TNAU Crop Protection"
+        }
+    }
+}
+
+# ---------------- OFFICIAL RESOURCES ----------------
+
+TNAU_URL = "https://agritech.tnau.ac.in/crop_protection/crop_prot.html"
+TNAU_IPM_URL = "https://agritech.tnau.ac.in/crop_protection/crop_prot_ipm.html"
+TNAU_DISEASE_URL = "https://agritech.tnau.ac.in/crop_protection/crop_prot_disease.html"
+
+# ---------------- LOCAL HISTORY ----------------
+
+HISTORY_FILE = Path("cropcare_history.json")
 
 
-# =============== SESSION DATA ===============
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "last_result" not in st.session_state:
-    st.session_state.last_result = None
-
-
-# =============== SIDEBAR ===============
-
-with st.sidebar:
-    st.header("👨‍🌾 Farmer Settings")
-    language = st.selectbox("Choose language", list(LANGUAGES))
-    location = st.text_input("Village / district (optional)")
-    st.caption("Avoid entering private or sensitive information.")
-
-    model_ready = load_model() is not None and len(load_labels()) > 0
-
-    st.divider()
-    st.write("**AI status**")
-    if model_ready:
-        st.success("Model files detected")
-    else:
-        st.warning("AI model not connected")
+def load_history():
+    try:
+        if HISTORY_FILE.exists():
+            with open(HISTORY_FILE, "r", encoding="utf-8") as file:
+                data = json.load(file)
+                return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        pass
+    return []
 
 
-# =============== NAVIGATION ===============
+def save_history(history):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as file:
+            json.dump(history, file, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
 
-page = st.radio(
-    "Navigation",
-    [
-        "Home",
-        "Leaf Detection",
-        "Disease Library",
-        "Weather",
-        "History & Reports",
-        "About"
-    ],
-    horizontal=True
+
+# ---------------- HEADER ----------------
+
+st.title("🌱 CropCare AI")
+st.subheader("Crop Disease Support for Every Farmer")
+
+st.write(
+    "A farmer-friendly prototype for crop photo uploads, "
+    "multilingual voice assistance, disease education, "
+    "and agricultural reference resources."
 )
 
+st.caption(
+    "Prototype notice: photo-based AI diagnosis, live expert support, "
+    "and keypad-phone messaging are not connected yet."
+)
 
-# =============== HOME ===============
+# ---------------- SIDEBAR ----------------
 
-if page == "Home":
-    st.markdown("## Welcome to CropCare AI 🌿")
-    st.write(
-        "Explore crop-health information, upload leaf photos when a model "
-        "is configured, and access voice assistance."
+with st.sidebar:
+    st.header("🌾 Farmer Settings")
+
+    language = st.selectbox(
+        "🌐 Select your language",
+        list(LANGUAGES.keys())
     )
-
-    a, b, c = st.columns(3)
-    a.metric("Languages", "10")
-    b.metric("Reference crops", len(DISEASES))
-    c.metric("Saved checks", len(st.session_state.history))
-
-    st.markdown("### Main features")
-    st.markdown("""
-    - Leaf photo upload and trained-model integration
-    - Disease symptoms, prevention and next-step guidance
-    - Multilingual voice messages
-    - Current weather monitoring
-    - Session history and downloadable reports
-    """)
-
-    if not model_ready:
-        st.info(
-            "Photo upload is available, but AI diagnosis will remain inactive "
-            "until compatible trained model files are added."
-        )
-
-
-# =============== LEAF DETECTION ===============
-
-elif page == "Leaf Detection":
-    st.header("📷 Crop Leaf Check")
 
     crop = st.selectbox(
-        "Which crop are you checking?",
-        list(DISEASES) + ["Other / Unknown"]
+        "🌱 Select your crop",
+        [
+            "Rice", "Tomato", "Chilli", "Cotton",
+            "Maize", "Potato", "Groundnut", "Wheat",
+            "Other / Unknown"
+        ]
     )
 
-    upload = st.file_uploader(
-        "Upload a clear leaf photo",
-        type=["jpg", "jpeg", "png"]
+    st.divider()
+
+    st.subheader("🌍 Useful Resources")
+    st.markdown(f"[TNAU Crop Protection]({TNAU_URL})")
+    st.markdown(f"[Integrated Pest Management]({TNAU_IPM_URL})")
+    st.markdown(f"[TNAU Disease Resources]({TNAU_DISEASE_URL})")
+
+# ---------------- MAIN TABS ----------------
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📷 Photo Assistant",
+    "📚 Crop Protection Library",
+    "🛡️ IPM Guide",
+    "🕘 My History"
+])
+
+# ---------------- TAB 1: PHOTO ASSISTANT ----------------
+
+with tab1:
+    st.header("📷 Crop Photo Assistant")
+
+    st.write(
+        "Upload a clear picture of an affected leaf or plant. "
+        "The current version displays the photo but does not diagnose it."
     )
 
-    if upload:
+    photo = st.file_uploader(
+        "Choose a crop photo",
+        type=["jpg", "jpeg", "png"],
+        key="crop_photo"
+    )
+
+    farmer_notes = st.text_area(
+        "Describe what you noticed (optional)",
+        placeholder="Example: yellow spots, curled leaves, or holes..."
+    )
+
+    if photo:
         try:
-            image = Image.open(upload).convert("RGB")
-            st.image(image, caption="Uploaded leaf", use_container_width=True)
+            image = Image.open(photo).convert("RGB")
 
-            if st.button("Analyze photo", type="primary"):
-                result = predict_image(image)
+            st.image(
+                image,
+                caption="Uploaded crop photo",
+                use_container_width=True
+            )
 
-                if result is None:
-                    st.session_state.last_result = None
-                    st.error(
-                        "AI prediction is unavailable. Add a compatible "
-                        "trained model and class_names.json."
-                    )
-                    st.write(
-                        "The disease library below is for reference only "
-                        "and cannot diagnose this uploaded image."
-                    )
+            st.info(
+                "Your photo was uploaded successfully. A trained AI model "
+                "is not connected, so no disease prediction is being made."
+            )
+
+            if st.button("Save Photo Check to History"):
+                history = load_history()
+
+                history.insert(0, {
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "crop": crop,
+                    "notes": farmer_notes.strip() or "No notes provided",
+                    "status": "Photo uploaded; AI diagnosis not connected"
+                })
+
+                history = history[:50]
+
+                if save_history(history):
+                    st.success("Photo-check details saved to local history.")
                 else:
-                    label = result["label"]
-                    confidence = result["confidence"]
-
-                    st.session_state.last_result = result
-                    st.subheader("Model prediction")
-                    st.write("Predicted class:", label)
-                    st.progress(max(0.0, min(1.0, confidence)))
-                    st.write(f"Model confidence: {confidence:.1%}")
-
-                    if confidence < 0.65:
-                        st.error(
-                            "Low confidence: do not rely on this prediction. "
-                            "Try a clearer photo and consult an expert."
-                        )
-                    else:
-                        st.warning(
-                            "This is a model prediction, not a confirmed "
-                            "diagnosis. Verify it before treatment."
-                        )
-
-                    st.session_state.history.append({
-                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "selected_crop": crop,
-                        "prediction": label,
-                        "confidence": round(confidence, 4),
-                        "location": location
-                    })
-
-                    # Show reference details only if a known name matches.
-                    matched = False
-                    for crop_name, entries in DISEASES.items():
-                        for disease_name, details in entries.items():
-                            if disease_name.lower() in label.lower():
-                                st.markdown("### Related reference information")
-                                st.write("**Crop reference:**", crop_name)
-                                st.write("**Disease:**", disease_name)
-                                st.write("**Symptoms:**", details[0])
-                                st.write("**Prevention:**", details[1])
-                                st.write("**Next step:**", details[2])
-                                matched = True
-                                break
-                        if matched:
-                            break
-
-                    if not matched:
-                        st.info(
-                            "No matching reference entry was found. "
-                            "Consult an agricultural expert."
-                        )
+                    st.warning(
+                        "History could not be saved. The hosting environment "
+                        "may not permit writing files."
+                    )
 
         except Exception:
-            st.error("Unable to read this image. Please try another photo.")
+            st.error("Unable to read this photo. Please try another image.")
 
+    st.divider()
+    st.subheader("🔊 Multilingual Voice Assistance")
 
-# =============== DISEASE LIBRARY ===============
-
-elif page == "Disease Library":
-    st.header("📚 Crop Disease Reference Library")
-    st.info(
-        "These entries describe common symptoms. They are not an exhaustive "
-        "database and do not confirm the disease in your plant."
-    )
-
-    selected_crop = st.selectbox("Choose crop", list(DISEASES))
-    disease = st.selectbox(
-        "Choose reference disease",
-        list(DISEASES[selected_crop])
-    )
-
-    symptoms, prevention, next_step = DISEASES[selected_crop][disease]
-
-    st.subheader(f"{selected_crop}: {disease}")
-    st.write("**Common symptoms:**", symptoms)
-    st.write("**Prevention:**", prevention)
-    st.write("**Recommended next step:**", next_step)
-    st.caption(
-        "Ask a local agricultural expert before applying pesticides or "
-        "other treatments. Always follow registered product labels."
-    )
-
-
-# =============== WEATHER MONITORING ===============
-
-elif page == "Weather":
-    st.header("🌦️ Local Weather Monitoring")
     st.write(
-        "Weather conditions can help farmers decide when to inspect crops. "
-        "These readings do not diagnose disease."
+        "Generate a spoken reminder in the selected language. "
+        "An internet connection is required for text-to-speech."
     )
 
-    col1, col2 = st.columns(2)
+    if st.button("🔊 Generate Voice Alert"):
+        selected = LANGUAGES[language]
+        message = selected["message"]
 
-    with col1:
-        latitude = st.number_input(
-            "Latitude",
-            min_value=-90.0,
-            max_value=90.0,
-            value=16.5062,
-            format="%.4f"
-        )
-
-    with col2:
-        longitude = st.number_input(
-            "Longitude",
-            min_value=-180.0,
-            max_value=180.0,
-            value=80.6480,
-            format="%.4f"
-        )
-
-    if st.button("Fetch current weather"):
         try:
-            response = requests.get(
-                "https://api.open-meteo.com/v1/forecast",
-                params={
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "current": (
-                        "temperature_2m,relative_humidity_2m,"
-                        "precipitation,wind_speed_10m"
-                    ),
-                    "timezone": "auto"
-                },
-                timeout=20
-            )
-            response.raise_for_status()
-            current = response.json()["current"]
+            audio_buffer = __import__("io").BytesIO()
 
-            temp = current.get("temperature_2m", 0)
-            humidity = current.get("relative_humidity_2m", 0)
-            rain = current.get("precipitation", 0)
-            wind = current.get("wind_speed_10m", 0)
-
-            a, b, c, d = st.columns(4)
-            a.metric("Temperature", f"{temp} °C")
-            b.metric("Humidity", f"{humidity}%")
-            c.metric("Precipitation", f"{rain} mm")
-            d.metric("Wind speed", f"{wind} km/h")
-
-            # Illustrative indicator only; not a validated disease model.
-            score = (
-                int(rain >= 10)
-                + int(humidity >= 85)
-                + int(wind >= 40)
+            speech = gTTS(
+                text=message,
+                lang=selected["code"]
             )
 
-            if score >= 2:
-                st.warning(
-                    "Weather caution: inspect your crops and monitor "
-                    "for visible symptoms."
-                )
-            elif score == 1:
-                st.info(
-                    "Consider closer crop monitoring under changing conditions."
-                )
-            else:
-                st.success(
-                    "These simple indicators did not trigger a high caution. "
-                    "Continue normal crop monitoring."
-                )
+            speech.write_to_fp(audio_buffer)
+            audio_buffer.seek(0)
 
-            st.caption(
-                "Weather from Open-Meteo. Thresholds are illustrative and "
-                "are not validated disease prediction thresholds."
-            )
+            st.audio(audio_buffer.getvalue(), format="audio/mp3")
+            st.success(f"Voice reminder generated in {language}.")
 
         except Exception:
             st.error(
-                "Weather could not be fetched. Check your internet connection "
-                "and try again."
+                "Voice generation failed. Check your internet connection. "
+                "Text-to-speech availability may vary by language."
             )
 
-
-# =============== HISTORY & REPORTS ===============
-
-elif page == "History & Reports":
-    st.header("📜 Leaf Check History")
-
-    if not st.session_state.history:
-        st.info("No saved checks in this session.")
-    else:
-        dataframe = pd.DataFrame(st.session_state.history)
-        st.dataframe(dataframe, use_container_width=True)
-
-        st.download_button(
-            "Download CSV report",
-            data=dataframe.to_csv(index=False).encode("utf-8"),
-            file_name="cropcare_history.csv",
-            mime="text/csv"
-        )
-
-        if st.button("Clear session history"):
-            st.session_state.history = []
-            st.rerun()
-
     st.caption(
-        "History is session-only and may be lost when the session restarts. "
-        "Permanent history needs a database."
+        "This voice alert is a general safety reminder, not a diagnosis "
+        "or a pesticide recommendation."
     )
 
+# ---------------- TAB 2: CROP PROTECTION LIBRARY ----------------
 
-# =============== ABOUT ===============
+with tab2:
+    st.header("📚 Crop Disease Reference Library")
 
-elif page == "About":
-    st.header("ℹ️ About CropCare AI")
     st.write(
-        "CropCare AI is a prototype designed to make crop-health education "
-        "more accessible through images, local-language messages and voice."
+        "This is a small educational starter library. It is not a complete "
+        "copy of TNAU information and is not an AI prediction."
     )
 
-    st.markdown("### Keypad-phone support")
+    available_crops = list(DISEASES.keys())
+    selected_library_crop = st.selectbox(
+        "Choose a crop to explore",
+        available_crops
+    )
+
+    disease_options = list(DISEASES[selected_library_crop].keys())
+    selected_disease = st.selectbox(
+        "Choose a disease or pest",
+        disease_options
+    )
+
+    info = DISEASES[selected_library_crop][selected_disease]
+
+    st.subheader(f"🌿 {selected_disease}")
+
+    st.markdown("**Common signs**")
+    st.write(info["signs"])
+
+    st.markdown("**General prevention practices**")
+    st.write(info["prevention"])
+
+    st.warning(
+        "Symptoms can look similar across different diseases and nutrient "
+        "problems. Confirm the cause before selecting a treatment."
+    )
+
+    st.markdown(f"**Reference topic:** {info['source']}")
+    st.markdown(f"[Visit TNAU Crop Protection]({TNAU_URL})")
+
+    if st.button("Save Reference to History"):
+        history = load_history()
+
+        history.insert(0, {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "crop": selected_library_crop,
+            "notes": f"Viewed reference: {selected_disease}",
+            "status": "Educational reference viewed; not a diagnosis"
+        })
+
+        history = history[:50]
+
+        if save_history(history):
+            st.success("Reference saved to local history.")
+        else:
+            st.warning("Unable to save history in this hosting environment.")
+
+# ---------------- TAB 3: IPM GUIDE ----------------
+
+with tab3:
+    st.header("🛡️ Integrated Pest Management (IPM)")
+
     st.write(
-        "Basic keypad phones usually cannot upload photos to this website. "
-        "To receive photos from those phones, add a compatible MMS or "
-        "messaging provider, a secure image-receiving backend, and a "
-        "configured SMS or voice-call service."
+        "Integrated Pest Management combines monitoring, prevention, "
+        "and appropriate control methods to manage crop problems."
     )
 
-    st.markdown("### Current limitations")
     st.markdown("""
-    - Model accuracy depends on the training data and testing.
-    - The reference library covers selected diseases, not every crop disease.
-    - Translation and voice availability may vary by language and service.
-    - Weather indicators are not a validated disease forecast.
-    - Session history is not permanent storage.
+    **1. Inspect crops regularly**
+
+    Check both sides of leaves, stems, fruits, and the surrounding soil.
+    Record new symptoms and how quickly they spread.
+
+    **2. Maintain field hygiene**
+
+    Remove diseased plant material when appropriate and keep tools clean.
+    Follow local advice for safe disposal.
+
+    **3. Use good crop practices**
+
+    Maintain suitable spacing, drainage, irrigation, and balanced nutrition.
+    Rotate crops where suitable for the crop and local conditions.
+
+    **4. Encourage safe, informed decisions**
+
+    Identify the likely cause before choosing a treatment. Do not mix or
+    apply pesticides without reading the approved label.
+
+    **5. Ask an agricultural expert**
+
+    Contact your local agricultural extension service or qualified
+    agricultural expert if symptoms spread quickly or the cause is unclear.
     """)
 
+    st.markdown(f"[Read TNAU IPM information]({TNAU_IPM_URL})")
 
-# =============== VOICE ASSISTANCE ===============
+    st.info(
+        "Treatment choices depend on the crop, region, disease confirmation, "
+        "and locally approved recommendations."
+    )
+
+# ---------------- TAB 4: HISTORY ----------------
+
+with tab4:
+    st.header("🕘 My CropCare History")
+
+    history = load_history()
+
+    if history:
+        st.caption(
+            "This history is stored in a local JSON file where file writing "
+            "is permitted. It is not a secure cloud database."
+        )
+
+        for index, item in enumerate(history):
+            with st.expander(
+                f"{item.get('date', 'Unknown date')} — "
+                f"{item.get('crop', 'Unknown crop')}"
+            ):
+                st.write("**Details:**", item.get("notes", ""))
+                st.write("**Status:**", item.get("status", ""))
+
+        if st.button("Clear History"):
+            if save_history([]):
+                st.success("History cleared.")
+                st.rerun()
+            else:
+                st.error("Unable to clear the history file.")
+    else:
+        st.info(
+            "No saved entries yet. Save a photo check or a library reference "
+            "to see it here."
+        )
+
+# ---------------- FOOTER ----------------
 
 st.divider()
-st.header("🔊 Multilingual Voice Assistance")
 
-default_message = LANGUAGES[language]["message"]
-
-voice_text = st.text_area(
-    "Message to read aloud",
-    value=default_message
+st.markdown(
+    """
+    <div style="text-align:center;">
+        <h4>🌱 CropCare AI — Technology for Farmer Support</h4>
+        <p>Multilingual assistance • Crop education • Safer farming decisions</p>
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-if st.button("Generate and play voice alert"):
-    try:
-        audio_buffer = io.BytesIO()
-        speech = gTTS(
-            text=voice_text,
-            lang=LANGUAGES[language]["tts"]
-        )
-        speech.write_to_fp(audio_buffer)
-        audio_buffer.seek(0)
-
-        st.audio(audio_buffer, format="audio/mp3")
-        st.success("Voice message generated.")
-
-    except Exception:
-        st.error(
-            "Voice generation failed. Check the internet connection. "
-            "The speech service may not support every language."
-        )
-
-st.divider()
 st.caption(
-    "CropCare AI prototype • Verify disease predictions and treatment "
-    "decisions with qualified agricultural experts."
+    "Educational prototype only. No trained image-classification model, "
+    "expert consultation service, SMS gateway, or keypad-phone messaging "
+    "service is connected. Verify disease identification and treatment "
+    "with a qualified agricultural expert."
 )
+
