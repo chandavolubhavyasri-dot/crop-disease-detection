@@ -1,6 +1,11 @@
 
-streamlit
+streamlit>=1.42.0
 Pillow
+requests
+numpy
+onnxruntime
+huggingface_hub
 gTTS
 deep-translator
+
 
