@@ -1,7 +1,6 @@
 
 import streamlit as st
 import requests
-import json
 import io
 import base64
 import re
@@ -52,57 +51,31 @@ LANGUAGES = {
 # ==================================================
 
 INDIAN_STATES_UTS = [
-    "Andhra Pradesh",
-    "Arunachal Pradesh",
-    "Assam",
-    "Bihar",
-    "Chhattisgarh",
-    "Goa",
-    "Gujarat",
-    "Haryana",
-    "Himachal Pradesh",
-    "Jharkhand",
-    "Karnataka",
-    "Kerala",
-    "Madhya Pradesh",
-    "Maharashtra",
-    "Manipur",
-    "Meghalaya",
-    "Mizoram",
-    "Nagaland",
-    "Odisha",
-    "Punjab",
-    "Rajasthan",
-    "Sikkim",
-    "Tamil Nadu",
-    "Telangana",
-    "Tripura",
-    "Uttar Pradesh",
-    "Uttarakhand",
-    "West Bengal",
-    "Andaman and Nicobar Islands",
-    "Chandigarh",
+    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar",
+    "Chhattisgarh", "Goa", "Gujarat", "Haryana",
+    "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala",
+    "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya",
+    "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan",
+    "Sikkim", "Tamil Nadu", "Telangana", "Tripura",
+    "Uttar Pradesh", "Uttarakhand", "West Bengal",
+    "Andaman and Nicobar Islands", "Chandigarh",
     "Dadra and Nagar Haveli and Daman and Diu",
-    "Delhi (National Capital Territory)",
-    "Jammu and Kashmir",
-    "Ladakh",
-    "Lakshadweep",
-    "Puducherry",
+    "Delhi (National Capital Territory)", "Jammu and Kashmir",
+    "Ladakh", "Lakshadweep", "Puducherry"
 ]
 
 
 # ==================================================
-# 4. AGRICULTURE BACKGROUND
+# 4. BACKGROUND IMAGE
 # ==================================================
 
 def add_background():
     if not BACKGROUND_IMAGE.exists():
         return
 
-    with open(BACKGROUND_IMAGE, "rb") as image_file:
-        encoded = base64.b64encode(
-            image_file.read()
-        ).decode("utf-8")
+    encoded = base64.b64encode(
+        BACKGROUND_IMAGE.read_bytes()
+    ).decode("utf-8")
 
     st.markdown(
         f"""
@@ -118,21 +91,17 @@ def add_background():
             background-position: center;
             background-attachment: fixed;
         }}
-
         h1, h2, h3 {{
             color: #1b5e20;
         }}
-
         div.stButton > button {{
             background-color: #2e7d32;
             color: white;
             border-radius: 9px;
-            border: none;
-            min-height: 42px;
         }}
         </style>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
 
@@ -140,52 +109,49 @@ add_background()
 
 
 # ==================================================
-# 5. LOAD THE AI MODEL
+# 5. LOAD AI MODEL
 # ==================================================
 
-@st.cache_resource(show_spinner="Loading the AI model...")
+@st.cache_resource(show_spinner="Loading AI model...")
 def load_model():
     model_path = hf_hub_download(
         repo_id=MODEL_REPO,
-        filename="efficientnet_v2_s_best.onnx",
+        filename="efficientnet_v2_s_best.onnx"
     )
 
-    # Download the separate ONNX weights file if the model uses it.
     hf_hub_download(
         repo_id=MODEL_REPO,
-        filename="efficientnet_v2_s_best.onnx.data",
+        filename="efficientnet_v2_s_best.onnx.data"
     )
 
     classes_path = hf_hub_download(
         repo_id=MODEL_REPO,
-        filename="classes.json",
+        filename="classes.json"
     )
+
+    import json
 
     with open(classes_path, "r", encoding="utf-8") as file:
         class_data = json.load(file)
 
-    if isinstance(class_data, dict):
-        classes = class_data.get("classes", class_data)
+    if isinstance(class_data, dict) and "classes" in class_data:
+        classes = class_data["classes"]
     else:
         classes = class_data
 
     if isinstance(classes, dict):
-        classes = [
-            classes[str(i)] if str(i) in classes
-            else classes[i]
-            for i in range(len(classes))
-        ]
+        classes = list(classes.values())
 
     session = ort.InferenceSession(
         model_path,
-        providers=["CPUExecutionProvider"],
+        providers=["CPUExecutionProvider"]
     )
 
     return session, classes
 
 
 # ==================================================
-# 6. PREDICT THE LEAF CONDITION
+# 6. PREDICT DISEASE
 # ==================================================
 
 def predict_disease(image):
@@ -193,70 +159,45 @@ def predict_disease(image):
 
     image = image.convert("RGB").resize(
         (224, 224),
-        Image.Resampling.BILINEAR,
+        Image.Resampling.BILINEAR
     )
 
     array = np.asarray(image, dtype=np.float32) / 255.0
 
-    mean = np.array(
-        [0.485, 0.456, 0.406],
-        dtype=np.float32,
-    )
-
-    std = np.array(
-        [0.229, 0.224, 0.225],
-        dtype=np.float32,
-    )
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
     array = (array - mean) / std
-
-    tensor = np.transpose(
-        array,
-        (2, 0, 1),
-    )[None, ...].astype(np.float32)
+    tensor = np.transpose(array, (2, 0, 1))[None, ...].astype(
+        np.float32
+    )
 
     input_name = session.get_inputs()[0].name
-
-    output = session.run(
-        None,
-        {input_name: tensor},
-    )[0]
-
+    output = session.run(None, {input_name: tensor})[0]
     scores = np.asarray(output).reshape(-1)
 
-    # If the model returns probabilities, preserve them.
-    if (
-        np.all(scores >= 0)
-        and np.all(scores <= 1)
-        and np.isclose(np.sum(scores), 1.0, atol=0.02)
-    ):
-        probabilities = scores
-    else:
-        scores = scores - np.max(scores)
-        probabilities = np.exp(scores)
-        probabilities /= np.sum(probabilities)
-
-    if len(classes) != len(probabilities):
+    if len(classes) != len(scores):
         raise ValueError(
-            "The number of model classes does not match its output. "
-            "Check the model's classes.json file."
+            "Model output and class labels do not match. "
+            "Check the model's files and class list."
         )
 
-    best_index = int(np.argmax(probabilities))
-    confidence = float(probabilities[best_index]) * 100
+    scores = scores - np.max(scores)
+    probabilities = np.exp(scores)
+    probabilities = probabilities / np.sum(probabilities)
 
-    return str(classes[best_index]), confidence
+    index = int(np.argmax(probabilities))
+
+    return str(classes[index]), float(probabilities[index]) * 100
 
 
 def clean_label(label):
-    label = str(label)
-    label = label.replace("___", " - ")
-    label = label.replace("_", " ")
+    label = str(label).replace("___", " - ").replace("_", " ")
     return re.sub(r"\s+", " ", label).strip()
 
 
 # ==================================================
-# 7. GENERAL DISEASE GUIDANCE
+# 7. DISEASE GUIDANCE
 # ==================================================
 
 def disease_guidance(label):
@@ -264,70 +205,67 @@ def disease_guidance(label):
 
     if "healthy" in text:
         return (
-            "The model classified this leaf as healthy. Continue regular "
-            "field inspections and monitor new leaves for unusual changes. "
-            "This result does not guarantee that the entire plant is healthy."
+            "The model classified this leaf as healthy. Continue routine "
+            "monitoring. This does not guarantee that the whole plant "
+            "is free from disease."
         )
 
     if "late blight" in text:
         return (
-            "Possible late blight. Check nearby plants and avoid prolonged "
-            "leaf wetness. Seek local agricultural advice about approved "
-            "management options for this crop."
+            "Possible late blight. Inspect nearby plants, avoid prolonged "
+            "leaf wetness, and seek local agricultural advice about "
+            "approved management options."
         )
 
     if "early blight" in text:
         return (
-            "Possible early blight. Inspect nearby leaves, remove badly "
-            "affected plant debris where appropriate, and avoid unnecessary "
-            "leaf wetness. Confirm suitable management with an expert."
+            "Possible early blight. Inspect surrounding leaves, remove "
+            "affected debris where appropriate, and avoid unnecessary "
+            "leaf wetness. Confirm management with an expert."
         )
 
     if "rust" in text:
         return (
-            "Possible rust disease. Inspect surrounding plants and monitor "
-            "new leaves. Ask a local agricultural officer about suitable "
-            "management for the affected crop."
+            "Possible rust disease. Inspect nearby plants and ask a local "
+            "agricultural officer about crop-specific management."
         )
 
     if "powdery mildew" in text:
         return (
             "Possible powdery mildew. Improve airflow around plants where "
-            "practical, avoid excessive crowding, and check nearby leaves. "
-            "Seek crop-specific management advice."
+            "practical and monitor nearby leaves. Seek crop-specific advice."
         )
 
     if "bacterial" in text:
         return (
-            "Possible bacterial disease. Avoid handling wet plants, clean "
-            "tools between plants, and avoid splashing water from affected "
-            "leaves onto healthy plants. Confirm the diagnosis first."
+            "Possible bacterial disease. Clean tools between plants and "
+            "avoid splashing water from affected leaves onto healthy plants. "
+            "Confirm the diagnosis before treatment."
         )
 
     if "mosaic" in text or "yellow leaf curl" in text:
         return (
             "Possible viral disease. Inspect nearby plants and check for "
-            "insect vectors. Do not assume a pesticide can cure a virus. "
-            "Ask an agricultural expert about appropriate management."
+            "insect vectors. Ask an agricultural expert about suitable "
+            "management; pesticides do not cure plant viruses."
         )
 
     if "leaf mold" in text or "leaf spot" in text:
         return (
-            "Possible leaf mold or leaf spot. Monitor nearby leaves, improve "
-            "airflow where practical, and avoid unnecessary leaf wetness. "
-            "Confirm the cause before choosing a treatment."
+            "Possible leaf mold or leaf spot. Inspect nearby leaves, improve "
+            "airflow where practical, and confirm the cause before choosing "
+            "a treatment."
         )
 
     return (
-        "The AI suggests a possible plant disease. Take clear photographs "
-        "of affected leaves, inspect nearby plants, and consult a local "
-        "agricultural officer. Do not apply chemicals based only on this "
-        "prediction."
+        "The model suggests a possible plant disease. Take clear photos "
+        "of affected leaves and consult a local agricultural officer. "
+        "Do not apply chemicals based only on this prediction."
     )
 
 
 # ==================================================
-# 8. WEATHER LOCATION SEARCH: OPEN-METEO
+# 8. WEATHER LOCATION SEARCH
 # ==================================================
 
 def find_indian_location(place):
@@ -337,16 +275,14 @@ def find_indian_location(place):
             "name": place,
             "count": 10,
             "language": "en",
-            "format": "json",
+            "format": "json"
         },
-        timeout=15,
+        timeout=15
     )
 
     response.raise_for_status()
 
-    results = response.json().get("results", [])
-
-    for result in results:
+    for result in response.json().get("results", []):
         if result.get("country_code") == "IN":
             return result
 
@@ -360,21 +296,17 @@ def get_weather(latitude, longitude):
             "latitude": latitude,
             "longitude": longitude,
             "current": (
-                "temperature_2m,"
-                "relative_humidity_2m,"
-                "precipitation,"
-                "wind_speed_10m"
+                "temperature_2m,relative_humidity_2m,"
+                "precipitation,wind_speed_10m"
             ),
             "daily": (
-                "precipitation_probability_max,"
-                "precipitation_sum,"
-                "temperature_2m_max,"
-                "temperature_2m_min"
+                "precipitation_probability_max,precipitation_sum,"
+                "temperature_2m_max,temperature_2m_min"
             ),
             "forecast_days": 1,
-            "timezone": "auto",
+            "timezone": "auto"
         },
-        timeout=15,
+        timeout=15
     )
 
     response.raise_for_status()
@@ -382,7 +314,7 @@ def get_weather(latitude, longitude):
 
 
 # ==================================================
-# 9. WEATHER-BASED PRECAUTIONS
+# 9. WEATHER PRECAUTIONS
 # ==================================================
 
 def weather_guidance(weather):
@@ -394,21 +326,21 @@ def weather_guidance(weather):
     rain = current.get("precipitation")
     wind = current.get("wind_speed_10m")
 
-    rain_chances = daily.get("precipitation_probability_max") or [None]
-    rain_chance = rain_chances[0]
+    rain_values = daily.get("precipitation_probability_max") or [None]
+    rain_chance = rain_values[0]
 
     advice = []
 
     if humidity is not None and humidity >= 85:
         advice.append(
-            "Humidity is high. Inspect crops regularly for disease symptoms "
+            "Humidity is high. Monitor crops for disease symptoms "
             "and avoid unnecessary leaf wetness."
         )
 
     if rain_chance is not None and rain_chance >= 60:
         advice.append(
-            "Rain is likely. Check field drainage and avoid spraying before "
-            "rain. Always follow product labels and local guidance."
+            "Rain is likely. Check drainage and avoid spraying before rain. "
+            "Follow product labels and local advice."
         )
 
     if rain is not None and rain >= 10:
@@ -419,27 +351,26 @@ def weather_guidance(weather):
 
     if temperature is not None and temperature >= 35:
         advice.append(
-            "Conditions are hot. Monitor soil moisture and irrigate according "
-            "to the crop's needs, preferably during cooler hours."
+            "Conditions are hot. Monitor soil moisture and irrigate "
+            "according to the crop's needs."
         )
 
     if wind is not None and wind >= 20:
         advice.append(
-            "Wind is strong. Avoid spraying in windy conditions to reduce "
-            "spray drift."
+            "Wind is strong. Avoid spraying in windy conditions."
         )
 
     if not advice:
         advice.append(
-            "No weather threshold in this prototype triggered a warning. "
-            "Continue routine crop monitoring and follow local advice."
+            "No weather warning was triggered by this prototype's "
+            "thresholds. Continue routine crop monitoring."
         )
 
     return advice
 
 
 # ==================================================
-# 10. TRANSLATION AND TEXT-TO-SPEECH
+# 10. MULTILINGUAL VOICE GENERATION
 # ==================================================
 
 def make_voice_alert(text, language_name):
@@ -450,7 +381,7 @@ def make_voice_alert(text, language_name):
     if language["translate"] != "en":
         translated = GoogleTranslator(
             source="auto",
-            target=language["translate"],
+            target=language["translate"]
         ).translate(text)
 
     audio_buffer = io.BytesIO()
@@ -458,7 +389,7 @@ def make_voice_alert(text, language_name):
     gTTS(
         text=translated,
         lang=tts_language,
-        slow=False,
+        slow=False
     ).write_to_fp(audio_buffer)
 
     audio_buffer.seek(0)
@@ -467,23 +398,21 @@ def make_voice_alert(text, language_name):
 
 
 # ==================================================
-# 11. SIDEBAR
+# 11. WEBSITE AND SIDEBAR
 # ==================================================
 
 st.title("🌱 CropCare AI")
-st.subheader(
-    "AI Crop Disease Detection and Multilingual Voice Alerts"
-)
+st.subheader("AI Crop Disease Detection and Multilingual Voice Alerts")
 
 st.write(
-    "Upload a leaf photograph for a preliminary AI prediction, "
-    "general disease guidance, and weather-based precautions."
+    "Upload a clear leaf photograph to receive a preliminary AI "
+    "prediction, general guidance, and local weather precautions."
 )
 
 st.info(
-    "This prototype's model is intended for a limited set of crop-disease "
-    "categories. It cannot diagnose every crop or disease. Confirm important "
-    "decisions with an agricultural expert."
+    "The model only recognises the disease categories it was trained on. "
+    "It cannot diagnose every crop or disease. Confirm important decisions "
+    "with an agricultural expert."
 )
 
 with st.sidebar:
@@ -491,22 +420,20 @@ with st.sidebar:
 
     selected_language = st.selectbox(
         "Choose voice language",
-        list(LANGUAGES.keys()),
+        list(LANGUAGES.keys())
     )
 
     selected_state = st.selectbox(
         "Select state / Union Territory",
-        INDIAN_STATES_UTS,
+        INDIAN_STATES_UTS
     )
 
     place_name = st.text_input(
         "Town, village, or district",
-        placeholder="Example: Guntur",
+        placeholder="Example: Guntur"
     )
 
-    st.caption(
-        "Enter a location in India to retrieve local weather."
-    )
+    st.caption("Enter a location in India to retrieve weather information.")
 
     st.markdown("---")
     st.subheader("🌾 Agricultural Resources")
@@ -514,48 +441,31 @@ with st.sidebar:
     st.markdown(
         "[TNAU Crop Protection](https://agritech.tnau.ac.in/crop_protection/crop_prot.html)"
     )
-
     st.markdown(
         "[TNAU Integrated Pest Management](https://agritech.tnau.ac.in/crop_protection/crop_prot_ipm.html)"
     )
-
     st.markdown(
         "[TNAU Disease Management](https://agritech.tnau.ac.in/crop_protection/crop_prot_disease.html)"
     )
 
 
 # ==================================================
-# 12. LEAF IMAGE UPLOAD
+# 12. UPLOAD AND ANALYSE
 # ==================================================
+
+crop_options = [
+    "Apple", "Blueberry", "Cherry", "Corn / Maize", "Grape",
+    "Orange", "Peach", "Bell Pepper", "Potato", "Raspberry",
+    "Soybean", "Squash", "Strawberry", "Tomato", "Other / Not sure"
+]
 
 st.header("📷 Upload a Crop Leaf Photograph")
 
-crop_options = [
-    "Apple",
-    "Blueberry",
-    "Cherry",
-    "Corn / Maize",
-    "Grape",
-    "Orange",
-    "Peach",
-    "Bell Pepper",
-    "Potato",
-    "Raspberry",
-    "Soybean",
-    "Squash",
-    "Strawberry",
-    "Tomato",
-    "Other / Not sure",
-]
-
-selected_crop = st.selectbox(
-    "Choose the crop if known",
-    crop_options,
-)
+selected_crop = st.selectbox("Choose the crop if known", crop_options)
 
 uploaded_file = st.file_uploader(
-    "Choose a clear leaf photograph",
-    type=["jpg", "jpeg", "png"],
+    "Choose a JPG or PNG photograph",
+    type=["jpg", "jpeg", "png"]
 )
 
 if uploaded_file is not None:
@@ -565,22 +475,21 @@ if uploaded_file is not None:
         st.image(
             leaf_image,
             caption="Uploaded leaf photograph",
-            use_container_width=True,
+            use_container_width=True
         )
 
         if st.button(
             "🔍 Analyse Leaf",
             type="primary",
-            use_container_width=True,
+            use_container_width=True
         ):
-            # Reset the previous result and audio.
             st.session_state["analysis_ready"] = False
             st.session_state.pop("voice_bytes", None)
             st.session_state.pop("voice_text", None)
             st.session_state.pop("voice_signature", None)
 
-            with st.spinner("Analysing the leaf photograph..."):
-                try:
+            try:
+                with st.spinner("Analysing the leaf photograph..."):
                     label, confidence = predict_disease(leaf_image)
 
                     st.session_state["last_label"] = clean_label(label)
@@ -599,7 +508,7 @@ if uploaded_file is not None:
                             if location:
                                 weather = get_weather(
                                     location["latitude"],
-                                    location["longitude"],
+                                    location["longitude"]
                                 )
 
                                 st.session_state["last_weather"] = weather
@@ -611,30 +520,35 @@ if uploaded_file is not None:
                                 )
                             else:
                                 st.warning(
-                                    "No matching Indian location was found. "
-                                    "Check the spelling or try a nearby town."
+                                    "Location not found. Check the spelling "
+                                    "or enter a nearby town."
                                 )
+
                         except Exception:
                             st.warning(
-                                "Weather data could not be loaded. "
-                                "The AI prediction will still be displayed."
+                                "Weather could not be loaded. The disease "
+                                "prediction will still be shown."
                             )
 
                     st.session_state["analysis_ready"] = True
 
-                except Exception as error:
-                    st.error(
-                        "The AI model could not analyse this image. "
-                        "Check the model files and Streamlit app logs."
-                    )
-                    st.caption(f"Technical detail: {error}")
+            except Exception as error:
+                st.error(
+                    "AI analysis failed. The model files or model format "
+                    "may need checking."
+                )
+                st.caption(f"Technical detail: {error}")
+
+    except Exception:
+        st.error("Could not open this image. Please upload a JPG or PNG.")
 
 
 # ==================================================
-# 13. DISPLAY PREDICTION AND WEATHER
+# 13. RESULTS, WEATHER AND AUTOMATIC VOICE ALERT
 # ==================================================
 
 if st.session_state.get("analysis_ready", False):
+
     label = st.session_state["last_label"]
     confidence = st.session_state["last_confidence"]
     guidance = st.session_state["last_guidance"]
@@ -647,8 +561,8 @@ if st.session_state.get("analysis_ready", False):
 
     if confidence < 60:
         st.warning(
-            "Confidence is low. Try a clearer photograph and seek expert "
-            "confirmation before making crop-treatment decisions."
+            "Confidence is low. Try a clearer image and get expert "
+            "confirmation before taking action."
         )
 
     st.subheader("🌿 Suggested Next Steps")
@@ -668,25 +582,25 @@ if st.session_state.get("analysis_ready", False):
         with col1:
             st.metric(
                 "Temperature",
-                f"{current.get('temperature_2m', 'N/A')} °C",
+                f"{current.get('temperature_2m', 'N/A')} °C"
             )
 
         with col2:
             st.metric(
                 "Humidity",
-                f"{current.get('relative_humidity_2m', 'N/A')}%",
+                f"{current.get('relative_humidity_2m', 'N/A')}%"
             )
 
         with col3:
             st.metric(
                 "Precipitation",
-                f"{current.get('precipitation', 'N/A')} mm",
+                f"{current.get('precipitation', 'N/A')} mm"
             )
 
         with col4:
             st.metric(
                 "Wind speed",
-                f"{current.get('wind_speed_10m', 'N/A')} km/h",
+                f"{current.get('wind_speed_10m', 'N/A')} km/h"
             )
 
         st.caption(
@@ -699,28 +613,17 @@ if st.session_state.get("analysis_ready", False):
         for item in weather_advice:
             st.write(f"• {item}")
 
-    else:
-        st.caption(
-            "For local weather information, enter your town or district "
-            "in the sidebar and analyse the leaf again."
-        )
-
-
-    # ==================================================
-    # 14. AUTOMATIC VOICE ALERT
-    # ==================================================
-
+    # Build a voice message specific to this analysis.
     spoken_text = (
-        f"CropCare AI result. The selected crop is {selected_crop}. "
-        f"The predicted leaf condition is {label}. "
-        f"Model confidence is {confidence:.1f} percent. "
+        f"CropCare AI result. Selected crop: {selected_crop}. "
+        f"Predicted condition: {label}. "
+        f"Confidence: {confidence:.1f} percent. "
         f"Suggested next steps: {guidance}"
     )
 
     if weather_advice:
         spoken_text += (
-            " Weather-based precautions. "
-            + " ".join(weather_advice)
+            " Weather precautions: " + " ".join(weather_advice)
         )
 
     voice_signature = (
@@ -728,15 +631,18 @@ if st.session_state.get("analysis_ready", False):
         round(confidence, 1),
         selected_language,
         selected_crop,
-        tuple(weather_advice),
+        tuple(weather_advice)
     )
 
+    st.subheader("🗣️ Voice Alert")
+
+    # Generate automatically once per analysis/language.
     if st.session_state.get("voice_signature") != voice_signature:
         try:
-            with st.spinner("Preparing your voice alert..."):
+            with st.spinner("Preparing the voice alert..."):
                 audio_bytes, translated_text = make_voice_alert(
                     spoken_text,
-                    selected_language,
+                    selected_language
                 )
 
                 st.session_state["voice_bytes"] = audio_bytes
@@ -749,21 +655,19 @@ if st.session_state.get("analysis_ready", False):
 
             st.warning(
                 "Automatic voice generation failed. Check your internet "
-                "connection. You can retry using the button below."
+                "connection and use the retry button."
             )
-
-    st.subheader("🗣️ Voice Alert")
 
     if st.session_state.get("voice_bytes"):
         st.audio(
             st.session_state["voice_bytes"],
             format="audio/mp3",
-            autoplay=True,
+            autoplay=True
         )
 
         st.caption(
             "Automatic playback is attempted. If your browser blocks it, "
-            "press Play on the audio player."
+            "tap Play on the audio player."
         )
 
         with st.expander("Read the spoken alert"):
@@ -774,7 +678,7 @@ if st.session_state.get("analysis_ready", False):
             with st.spinner("Generating voice alert..."):
                 audio_bytes, translated_text = make_voice_alert(
                     spoken_text,
-                    selected_language,
+                    selected_language
                 )
 
                 st.session_state["voice_bytes"] = audio_bytes
@@ -785,22 +689,20 @@ if st.session_state.get("analysis_ready", False):
 
         except Exception:
             st.error(
-                "Voice generation failed. Please check your internet "
-                "connection and try again."
+                "Voice generation failed. Check your internet connection "
+                "and try again."
 
 
 # ==================================================
-# 15. FOOTER
+# 14. FOOTER
 # ==================================================
 
 st.markdown("---")
 
 st.caption(
-    "CropCare AI is an educational prototype. Predictions may be wrong "
-    "and should not replace expert diagnosis. Weather precautions are "
-    "general guidance, not a disease forecast."
+    "CropCare AI is an educational prototype. Predictions can be wrong "
+    "and do not replace expert diagnosis. Weather precautions are general "
+    "guidance, not a disease forecast."
 )
 
-
-                                
-        
+    
