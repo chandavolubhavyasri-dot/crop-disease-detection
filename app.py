@@ -1,788 +1,622 @@
 
-import streamlit as st
-import requests
 import io
-import base64
-import re
 import json
-import numpy as np
-import onnxruntime as ort
+import os
+from datetime import datetime
 
-from pathlib import Path
+import numpy as np
+import pandas as pd
+import requests
+import streamlit as st
 from PIL import Image
 from gtts import gTTS
-from deep_translator import GoogleTranslator
-from huggingface_hub import hf_hub_download
+
+try:
+    import tensorflow as tf
+except ImportError:
+    tf = None
 
 
-# ==================================================
-# 1. PAGE CONFIGURATION
-# ==================================================
+# =============== PAGE CONFIGURATION ===============
+
 st.set_page_config(
     page_title="CropCare AI",
     page_icon="🌱",
-    layout="wide",
+    layout="wide"
 )
 
-MODEL_REPO = "BiernyVR/crop-disease-classifier"
-BACKGROUND_IMAGE = Path("farm_backgroundjpg.png")
+st.title("🌱 CropCare AI")
+st.subheader("AI Crop Health & Multilingual Farmer Assistance")
+st.write(
+    "A farmer-friendly prototype for leaf analysis, disease education, "
+    "weather awareness and voice assistance."
+)
 
+# =============== LANGUAGES ===============
 
-# ==================================================
-# 2. LANGUAGES
-# ==================================================
 LANGUAGES = {
-    "English": {"translate": "en", "tts": "en"},
-    "Hindi": {"translate": "hi", "tts": "hi"},
-    "Telugu": {"translate": "te", "tts": "te"},
-    "Tamil": {"translate": "ta", "tts": "ta"},
-    "Bengali": {"translate": "bn", "tts": "bn"},
-    "Kannada": {"translate": "kn", "tts": "kn"},
-    "Malayalam": {"translate": "ml", "tts": "ml"},
-    "Marathi": {"translate": "mr", "tts": "mr"},
-    "Gujarati": {"translate": "gu", "tts": "gu"},
-    "Punjabi": {"translate": "pa", "tts": "pa"},
+    "English": {"tts": "en", "message":
+        "Please check your crop regularly. If you suspect a disease, "
+        "consult an agricultural expert before treatment."},
+    "Hindi": {"tts": "hi", "message":
+        "अपनी फसल की नियमित जाँच करें। बीमारी का संदेह होने पर उपचार से पहले कृषि विशेषज्ञ से सलाह लें।"},
+    "Telugu": {"tts": "te", "message":
+        "మీ పంటను క్రమం తప్పకుండా పరిశీలించండి. వ్యాధి అనుమానం ఉంటే చికిత్సకు ముందు వ్యవసాయ నిపుణుడిని సంప్రదించండి."},
+    "Tamil": {"tts": "ta", "message":
+        "பயிரைத் தொடர்ந்து கண்காணிக்கவும். நோய் இருப்பதாக சந்தேகித்தால் சிகிச்சைக்கு முன் வேளாண் நிபுணரை அணுகவும்."},
+    "Kannada": {"tts": "kn", "message":
+        "ಬೆಳೆಯನ್ನು ನಿಯಮಿತವಾಗಿ ಪರಿಶೀಲಿಸಿ. ರೋಗದ ಅನುಮಾನವಿದ್ದರೆ ಚಿಕಿತ್ಸೆಗೂ ಮೊದಲು ಕೃಷಿ ತಜ್ಞರನ್ನು ಸಂಪರ್ಕಿಸಿ."},
+    "Malayalam": {"tts": "ml", "message":
+        "വിള പതിവായി പരിശോധിക്കുക. രോഗം സംശയിക്കുന്നുവെങ്കിൽ ചികിത്സയ്ക്ക് മുമ്പ് കാർഷിക വിദഗ്ധനെ സമീപിക്കുക."},
+    "Bengali": {"tts": "bn", "message":
+        "নিয়মিত ফসল পরীক্ষা করুন। রোগের সন্দেহ হলে চিকিৎসার আগে কৃষি বিশেষজ্ঞের পরামর্শ নিন।"},
+    "Marathi": {"tts": "mr", "message":
+        "पिकाची नियमित तपासणी करा. रोगाचा संशय असल्यास उपचारापूर्वी कृषी तज्ज्ञांचा सल्ला घ्या."},
+    "Gujarati": {"tts": "gu", "message":
+        "પાકની નિયમિત તપાસ કરો. રોગની શંકા હોય તો સારવાર પહેલાં કૃષિ નિષ્ણાતની સલાહ લો."},
+    "Punjabi": {"tts": "pa", "message":
+        "ਫਸਲ ਦੀ ਨਿਯਮਿਤ ਜਾਂਚ ਕਰੋ। ਬਿਮਾਰੀ ਦਾ ਸ਼ੱਕ ਹੋਵੇ ਤਾਂ ਇਲਾਜ ਤੋਂ ਪਹਿਲਾਂ ਖੇਤੀ ਮਾਹਿਰ ਦੀ ਸਲਾਹ ਲਵੋ."}
 }
 
+# =============== DISEASE REFERENCE LIBRARY ===============
+# General educational information, not a diagnosis.
 
-# ==================================================
-# 3. INDIAN STATES AND UNION TERRITORIES
-# ==================================================
-INDIAN_STATES_UTS = [
-    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar",
-    "Chhattisgarh", "Goa", "Gujarat", "Haryana",
-    "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala",
-    "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya",
-    "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan",
-    "Sikkim", "Tamil Nadu", "Telangana", "Tripura",
-    "Uttar Pradesh", "Uttarakhand", "West Bengal",
-    "Andaman and Nicobar Islands", "Chandigarh",
-    "Dadra and Nagar Haveli and Daman and Diu",
-    "Delhi (National Capital Territory)", "Jammu and Kashmir",
-    "Ladakh", "Lakshadweep", "Puducherry",
-]
+DISEASES = {
+    "Rice": {
+        "Blast": (
+            "Diamond-shaped leaf lesions, often with grey centres.",
+            "Use locally recommended varieties and balanced crop nutrition.",
+            "Ask an agricultural expert to confirm the disease."
+        ),
+        "Bacterial leaf blight": (
+            "Yellowing or drying may begin at leaf tips or edges.",
+            "Use healthy seed and locally recommended varieties.",
+            "Seek local confirmation before choosing treatment."
+        ),
+        "Brown spot": (
+            "Brown oval spots can develop on leaves.",
+            "Use healthy seed and maintain balanced nutrition.",
+            "Consult an agricultural expert about management."
+        )
+    },
+    "Tomato": {
+        "Early blight": (
+            "Dark spots may develop concentric rings and yellowing.",
+            "Rotate crops and remove infected plant debris appropriately.",
+            "Confirm the disease before selecting a registered treatment."
+        ),
+        "Late blight": (
+            "Water-soaked dark lesions may spread rapidly in wet conditions.",
+            "Monitor plants frequently and avoid prolonged leaf wetness.",
+            "Seek prompt local agricultural advice if suspected."
+        ),
+        "Bacterial spot": (
+            "Small dark spots may affect leaves and fruit.",
+            "Use healthy planting material and avoid handling wet plants.",
+            "Get expert confirmation before choosing control measures."
+        ),
+        "Yellow leaf curl": (
+            "Leaves may curl, yellow and become smaller.",
+            "Monitor whiteflies and use recommended integrated pest management.",
+            "Several causes look similar; ask an expert to confirm."
+        )
+    },
+    "Chilli": {
+        "Anthracnose": (
+            "Sunken dark lesions may develop on fruit.",
+            "Use healthy planting material and remove affected fruit appropriately.",
+            "Confirm locally before choosing treatment."
+        ),
+        "Leaf curl": (
+            "Leaves may curl or become distorted and plants may be stunted.",
+            "Monitor insect vectors and follow local crop advice.",
+            "Confirm the cause before treatment."
+        )
+    },
+    "Cotton": {
+        "Bacterial blight": (
+            "Angular dark lesions may affect leaves, stems or bolls.",
+            "Use healthy seed and locally recommended varieties.",
+            "Consult an agricultural expert for confirmation."
+        ),
+        "Cotton leaf curl": (
+            "Leaves may curl upward and show vein thickening.",
+            "Monitor whiteflies and follow regional integrated pest management advice.",
+            "Seek expert confirmation before treatment."
+        )
+    },
+    "Maize": {
+        "Northern leaf blight": (
+            "Long, cigar-shaped lesions can develop on leaves.",
+            "Use locally recommended varieties and rotate crops where practical.",
+            "Confirm the disease with an agricultural expert."
+        ),
+        "Common rust": (
+            "Reddish-brown raised pustules may appear on leaves.",
+            "Monitor fields and use recommended resistant varieties.",
+            "Ask an expert to assess severity."
+        )
+    },
+    "Potato": {
+        "Early blight": (
+            "Brown leaf spots may show target-like rings.",
+            "Rotate crops and remove infected debris appropriately.",
+            "Confirm the disease before treatment."
+        ),
+        "Late blight": (
+            "Dark, water-soaked lesions can spread quickly in wet weather.",
+            "Monitor fields and remove infected material safely.",
+            "Contact an agricultural officer promptly if suspected."
+        )
+    },
+    "Groundnut": {
+        "Early leaf spot": (
+            "Brown circular leaf spots may have yellow halos.",
+            "Rotate crops and monitor plants regularly.",
+            "Confirm locally before applying a treatment."
+        ),
+        "Late leaf spot": (
+            "Dark leaf spots may develop, sometimes without prominent halos.",
+            "Follow recommended field sanitation and crop rotation.",
+            "Seek expert confirmation and management advice."
+        )
+    },
+    "Wheat": {
+        "Leaf rust": (
+            "Orange-brown pustules may appear on leaf surfaces.",
+            "Use locally recommended resistant varieties and monitor fields.",
+            "Ask an agricultural expert to confirm."
+        ),
+        "Powdery mildew": (
+            "White powder-like patches may appear on leaves.",
+            "Use suitable varieties and avoid excessive nitrogen.",
+            "Seek locally appropriate management advice."
+        )
+    }
+}
 
+# =============== MODEL INTEGRATION ===============
+# Required files:
+# model.keras
+# class_names.json
+#
+# class_names.json must contain class labels in exactly the same
+# order as the model's output classes.
+#
+# Example:
+# ["Tomato___Early_blight", "Tomato___healthy", "Rice___Blast"]
+#
+# The preprocessing below assumes RGB pixels scaled to 0..1.
+# Change it if your model was trained differently.
 
-# ==================================================
-# 4. BACKGROUND IMAGE
-# ==================================================
-def add_background():
-    if not BACKGROUND_IMAGE.is_file():
-        return
-
-    encoded = base64.b64encode(
-        BACKGROUND_IMAGE.read_bytes()
-    ).decode("utf-8")
-
-    mime = (
-        "image/jpeg"
-        if BACKGROUND_IMAGE.suffix.lower() in {".jpg", ".jpeg"}
-        else "image/png"
-    )
-
-    st.markdown(
-        f"""
-        <style>
-        .stApp {{
-            background-image:
-                linear-gradient(
-                    rgba(255,255,255,0.88),
-                    rgba(255,255,255,0.91)
-                ),
-                url("data:{mime};base64,{encoded}");
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-        }}
-        h1, h2, h3 {{
-            color: #1b5e20;
-        }}
-        div.stButton > button {{
-            background-color: #2e7d32;
-            color: white;
-            border-radius: 9px;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-add_background()
-
-
-# ==================================================
-# 5. LOAD MODEL AND LABELS
-# ==================================================
-@st.cache_resource(show_spinner="Loading AI model...")
+@st.cache_resource
 def load_model():
-    model_path = hf_hub_download(
-        repo_id=MODEL_REPO,
-        filename="efficientnet_v2_s_best.onnx",
-    )
-
-    classes_path = hf_hub_download(
-        repo_id=MODEL_REPO,
-        filename="classes.json",
-    )
-
-    with open(classes_path, "r", encoding="utf-8") as file:
-        class_data = json.load(file)
-
-    if isinstance(class_data, dict):
-        if "classes" in class_data:
-            classes = class_data["classes"]
-        elif "class_names" in class_data:
-            classes = class_data["class_names"]
-        else:
-            try:
-                classes = [
-                    class_data[key]
-                    for key in sorted(
-                        class_data,
-                        key=lambda item: int(item),
-                    )
-                ]
-            except (ValueError, TypeError):
-                raise ValueError(
-                    "Unrecognised classes.json format. Expected a "
-                    "'classes' list or an index-to-label dictionary."
-                )
-    elif isinstance(class_data, list):
-        classes = class_data
-    else:
-        raise ValueError(
-            "classes.json must contain a list or dictionary."
-        )
-
-    if not isinstance(classes, list) or not classes:
-        raise ValueError("No class labels were found in classes.json.")
-
-    session = ort.InferenceSession(
-        model_path,
-        providers=["CPUExecutionProvider"],
-    )
-
-    return session, [str(item) for item in classes]
-
-
-# ==================================================
-# 6. IMAGE PREDICTION
-# ==================================================
-def predict_disease(image):
-    session, classes = load_model()
-
-    input_meta = session.get_inputs()[0]
-    input_shape = input_meta.shape
-
-    height = (
-        input_shape[2]
-        if len(input_shape) == 4
-        and isinstance(input_shape[2], int)
-        else 224
-    )
-    width = (
-        input_shape[3]
-        if len(input_shape) == 4
-        and isinstance(input_shape[3], int)
-        else 224
-    )
-
-    image = image.convert("RGB").resize(
-        (width, height),
-        Image.Resampling.BILINEAR,
-    )
-
-    array = np.asarray(image, dtype=np.float32) / 255.0
-
-    # Assumes the model uses ImageNet normalization.
-    mean = np.array(
-        [0.485, 0.456, 0.406],
-        dtype=np.float32,
-    )
-    std = np.array(
-        [0.229, 0.224, 0.225],
-        dtype=np.float32,
-    )
-
-    array = (array - mean) / std
-
-    if (
-        len(input_shape) == 4
-        and input_shape[1] == 3
-    ):
-        tensor = np.transpose(
-            array,
-            (2, 0, 1),
-        )[None, ...].astype(np.float32)
-
-    elif (
-        len(input_shape) == 4
-        and input_shape[-1] == 3
-    ):
-        tensor = array[None, ...].astype(np.float32)
-
-    else:
-        raise ValueError(
-            f"Unsupported model input shape: {input_shape}. "
-            "Preprocessing must match the model."
-        )
-
-    output = session.run(
-        None,
-        {input_meta.name: tensor},
-    )[0]
-
-    scores = np.asarray(output).reshape(-1)
-
-    if len(classes) != len(scores):
-        raise ValueError(
-            f"Model returned {len(scores)} scores but classes.json "
-            f"contains {len(classes)} labels."
-        )
-
-    # Keep probabilities if already normalized; otherwise use softmax.
-    if (
-        np.all(scores >= 0)
-        and np.all(scores <= 1)
-        and np.isclose(float(np.sum(scores)), 1.0, atol=0.02)
-    ):
-        probabilities = scores
-    else:
-        scores = scores - np.max(scores)
-        exp_scores = np.exp(scores)
-        probabilities = exp_scores / np.sum(exp_scores)
-
-    index = int(np.argmax(probabilities))
-
-    return (
-        classes[index],
-        float(probabilities[index]) * 100.0,
-    )
-
-
-def clean_label(label):
-    label = str(label).replace("___", " - ").replace("_", " ")
-    return re.sub(r"\s+", " ", label).strip()
-
-
-# ==================================================
-# 7. GENERAL DISEASE GUIDANCE
-# ==================================================
-def disease_guidance(label):
-    text = label.lower()
-
-    if "healthy" in text:
-        return (
-            "The model classified this leaf as healthy. Continue routine "
-            "monitoring. This does not guarantee the entire plant is healthy."
-        )
-
-    if "late blight" in text:
-        return (
-            "Possible late blight. Inspect nearby plants, avoid prolonged "
-            "leaf wetness, and seek local agricultural advice about approved "
-            "management options."
-        )
-
-    if "early blight" in text:
-        return (
-            "Possible early blight. Inspect surrounding leaves, remove "
-            "affected debris where appropriate, and confirm management "
-            "with an agricultural expert."
-        )
-
-    if "rust" in text:
-        return (
-            "Possible rust disease. Inspect nearby plants and ask a local "
-            "agricultural officer about crop-specific management."
-        )
-
-    if "powdery mildew" in text:
-        return (
-            "Possible powdery mildew. Improve airflow where practical and "
-            "monitor nearby leaves. Seek crop-specific advice."
-        )
-
-    if "bacterial" in text:
-        return (
-            "Possible bacterial disease. Clean tools between plants and "
-            "avoid splashing water from affected leaves. Confirm the "
-            "diagnosis before treatment."
-        )
-
-    if "mosaic" in text or "yellow leaf curl" in text:
-        return (
-            "Possible viral disease. Inspect nearby plants and check for "
-            "insect vectors. Consult an agricultural expert; pesticides "
-            "do not cure plant viruses."
-        )
-
-    if "leaf mold" in text or "leaf spot" in text:
-        return (
-            "Possible leaf mold or leaf spot. Inspect nearby leaves, improve "
-            "airflow where practical, and confirm the cause before treatment."
-        )
-
-    return (
-        "The model suggests a possible plant disease. Take clear photos "
-        "of affected leaves and consult a local agricultural officer. "
-        "Do not apply chemicals based only on this prediction."
-    )
-
-
-# ==================================================
-# 8. OPEN-METEO WEATHER
-# ==================================================
-def find_indian_location(place):
-    response = requests.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={
-            "name": place,
-            "count": 10,
-            "language": "en",
-            "format": "json",
-        },
-        timeout=15,
-    )
-
-    response.raise_for_status()
-
-    for result in response.json().get("results", []):
-        if result.get("country_code") == "IN":
-            return result
-
-    return None
-
-
-def get_weather(latitude, longitude):
-    response = requests.get(
-        "https://api.open-meteo.com/v1/forecast",
-        params={
-            "latitude": latitude,
-            "longitude": longitude,
-            "current": (
-                "temperature_2m,relative_humidity_2m,"
-                "precipitation,wind_speed_10m"
-            ),
-            "daily": (
-                "precipitation_probability_max,precipitation_sum,"
-                "temperature_2m_max,temperature_2m_min"
-            ),
-            "forecast_days": 1,
-            "timezone": "auto",
-        },
-        timeout=15,
-    )
-
-    response.raise_for_status()
-    return response.json()
-
-
-# ==================================================
-# 9. WEATHER PRECAUTIONS
-# ==================================================
-def weather_guidance(weather):
-    current = weather.get("current", {})
-    daily = weather.get("daily", {})
-
-    temperature = current.get("temperature_2m")
-    humidity = current.get("relative_humidity_2m")
-    rain = current.get("precipitation")
-    wind = current.get("wind_speed_10m")
-
-    rain_values = (
-        daily.get("precipitation_probability_max") or [None]
-    )
-    rain_chance = rain_values[0]
-
-    advice = []
-
-    if humidity is not None and humidity >= 85:
-        advice.append(
-            "Humidity is high. Monitor crops for disease symptoms "
-            "and avoid unnecessary leaf wetness."
-        )
-
-    if rain_chance is not None and rain_chance >= 60:
-        advice.append(
-            "Rain is likely. Check drainage and avoid spraying before "
-            "rain. Follow product labels and local advice."
-        )
-
-    if rain is not None and rain >= 10:
-        advice.append(
-            "Precipitation is elevated. Check for waterlogging and allow "
-            "foliage to dry when possible."
-        )
-
-    if temperature is not None and temperature >= 35:
-        advice.append(
-            "Conditions are hot. Monitor soil moisture and irrigate "
-            "according to the crop's needs."
-        )
-
-    if wind is not None and wind >= 20:
-        advice.append(
-            "Wind is strong. Avoid spraying in windy conditions."
-        )
-
-    if not advice:
-        advice.append(
-            "No weather warning was triggered by this prototype's "
-            "thresholds. Continue routine crop monitoring."
-        )
-
-    return advice
-
-
-# ==================================================
-# 10. MULTILINGUAL VOICE
-# ==================================================
-def make_voice_alert(text, language_name):
-    language = LANGUAGES[language_name]
-    translated = text
-
-    if language["translate"] != "en":
-        translated = GoogleTranslator(
-            source="auto",
-            target=language["translate"],
-        ).translate(text)
-
-    audio_buffer = io.BytesIO()
-
-    gTTS(
-        text=translated,
-        lang=language["tts"],
-        slow=False,
-    ).write_to_fp(audio_buffer)
-
-    return audio_buffer.getvalue(), translated
-
-
-# ==================================================
-# 11. SIDEBAR AND MAIN UI
-# ==================================================
-st.title("🌱 CropCare AI")
-st.subheader(
-    "AI Crop Disease Detection and Multilingual Voice Alerts"
-)
-
-st.write(
-    "Upload a clear leaf photograph for a preliminary AI prediction, "
-    "general guidance, and local weather precautions."
-)
-
-st.info(
-    "This model can only recognise its trained categories. It cannot "
-    "diagnose every crop or disease. Confirm important decisions with "
-    "an agricultural expert."
-)
+    if tf is None or not os.path.exists("model.keras"):
+        return None
+    try:
+        return tf.keras.models.load_model("model.keras")
+    except Exception:
+        return None
+
+
+def load_labels():
+    if not os.path.exists("class_names.json"):
+        return []
+    try:
+        with open("class_names.json", "r", encoding="utf-8") as f:
+            labels = json.load(f)
+        return labels if isinstance(labels, list) else []
+    except Exception:
+        return []
+
+
+def predict_image(image):
+    model = load_model()
+    labels = load_labels()
+
+    if model is None or not labels:
+        return None
+
+    try:
+        shape = model.input_shape
+        height = int(shape[1] or 224)
+        width = int(shape[2] or 224)
+
+        image = image.convert("RGB").resize((width, height))
+        pixels = np.asarray(image, dtype=np.float32) / 255.0
+        pixels = np.expand_dims(pixels, axis=0)
+
+        output = np.asarray(model.predict(pixels, verbose=0)).reshape(-1)
+
+        if len(output) != len(labels) or len(output) == 0:
+            return None
+
+        # This assumes model outputs class probabilities.
+        # For logits, apply the correct softmax for your model.
+        index = int(np.argmax(output))
+        confidence = float(output[index])
+
+        return {
+            "label": str(labels[index]),
+            "confidence": confidence
+        }
+    except Exception:
+        return None
+
+
+# =============== SESSION DATA ===============
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
+
+
+# =============== SIDEBAR ===============
 
 with st.sidebar:
-    st.header("🌐 Farmer Settings")
+    st.header("👨‍🌾 Farmer Settings")
+    language = st.selectbox("Choose language", list(LANGUAGES))
+    location = st.text_input("Village / district (optional)")
+    st.caption("Avoid entering private or sensitive information.")
 
-    selected_language = st.selectbox(
-        "Choose voice language",
-        list(LANGUAGES.keys()),
-    )
+    model_ready = load_model() is not None and len(load_labels()) > 0
 
-    selected_state = st.selectbox(
-        "Select state / Union Territory",
-        INDIAN_STATES_UTS,
-    )
-
-    place_name = st.text_input(
-        "Town, village, or district",
-        placeholder="Example: Guntur",
-    )
-
-    st.caption(
-        "Enter an Indian location to retrieve weather information."
-    )
-
-    st.markdown("---")
-    st.subheader("🌾 Agricultural Resources")
-
-    st.markdown(
-        "[TNAU Crop Protection]"
-        "(https://agritech.tnau.ac.in/crop_protection/crop_prot.html)"
-    )
-    st.markdown(
-        "[TNAU Integrated Pest Management]"
-        "(https://agritech.tnau.ac.in/crop_protection/crop_prot_ipm.html)"
-    )
-    st.markdown(
-        "[TNAU Disease Management]"
-        "(https://agritech.tnau.ac.in/crop_protection/crop_prot_disease.html)"
-    )
+    st.divider()
+    st.write("**AI status**")
+    if model_ready:
+        st.success("Model files detected")
+    else:
+        st.warning("AI model not connected")
 
 
-# ==================================================
-# 12. UPLOAD AND ANALYSE
-# ==================================================
-crop_options = [
-    "Apple", "Blueberry", "Cherry", "Corn / Maize", "Grape",
-    "Orange", "Peach", "Bell Pepper", "Potato", "Raspberry",
-    "Soybean", "Squash", "Strawberry", "Tomato", "Other / Not sure",
-]
+# =============== NAVIGATION ===============
 
-st.header("📷 Upload a Crop Leaf Photograph")
-
-selected_crop = st.selectbox(
-    "Choose the crop if known",
-    crop_options,
+page = st.radio(
+    "Navigation",
+    [
+        "Home",
+        "Leaf Detection",
+        "Disease Library",
+        "Weather",
+        "History & Reports",
+        "About"
+    ],
+    horizontal=True
 )
 
-uploaded_file = st.file_uploader(
-    "Choose a JPG or PNG photograph",
-    type=["jpg", "jpeg", "png"],
-)
 
-if uploaded_file is not None:
-    try:
-        leaf_image = Image.open(uploaded_file).convert("RGB")
+# =============== HOME ===============
 
-        st.image(
-            leaf_image,
-            caption="Uploaded leaf photograph",
-            use_container_width=True,
+if page == "Home":
+    st.markdown("## Welcome to CropCare AI 🌿")
+    st.write(
+        "Explore crop-health information, upload leaf photos when a model "
+        "is configured, and access voice assistance."
+    )
+
+    a, b, c = st.columns(3)
+    a.metric("Languages", "10")
+    b.metric("Reference crops", len(DISEASES))
+    c.metric("Saved checks", len(st.session_state.history))
+
+    st.markdown("### Main features")
+    st.markdown("""
+    - Leaf photo upload and trained-model integration
+    - Disease symptoms, prevention and next-step guidance
+    - Multilingual voice messages
+    - Current weather monitoring
+    - Session history and downloadable reports
+    """)
+
+    if not model_ready:
+        st.info(
+            "Photo upload is available, but AI diagnosis will remain inactive "
+            "until compatible trained model files are added."
         )
 
-        if st.button(
-            "🔍 Analyse Leaf",
-            type="primary",
-            use_container_width=True,
-        ):
-            st.session_state["analysis_ready"] = False
 
-            for key in (
-                "voice_bytes",
-                "voice_text",
-                "voice_signature",
-            ):
-                st.session_state.pop(key, None)
+# =============== LEAF DETECTION ===============
 
-            try:
-                with st.spinner("Analysing the leaf photograph..."):
-                    raw_label, confidence = predict_disease(leaf_image)
-                    label = clean_label(raw_label)
+elif page == "Leaf Detection":
+    st.header("📷 Crop Leaf Check")
 
-                    st.session_state["last_label"] = label
-                    st.session_state["last_confidence"] = confidence
-                    st.session_state["last_guidance"] = disease_guidance(label)
-                    st.session_state["last_weather"] = None
-                    st.session_state["last_weather_advice"] = []
-                    st.session_state["last_location"] = None
+    crop = st.selectbox(
+        "Which crop are you checking?",
+        list(DISEASES) + ["Other / Unknown"]
+    )
 
-                    if place_name.strip():
-                        try:
-                            location = find_indian_location(
-                                place_name.strip()
-                            )
+    upload = st.file_uploader(
+        "Upload a clear leaf photo",
+        type=["jpg", "jpeg", "png"]
+    )
 
-                            if location:
-                                weather = get_weather(
-                                    location["latitude"],
-                                    location["longitude"],
-                                )
+    if upload:
+        try:
+            image = Image.open(upload).convert("RGB")
+            st.image(image, caption="Uploaded leaf", use_container_width=True)
 
-                                st.session_state["last_weather"] = weather
-                                st.session_state["last_weather_advice"] = (
-                                    weather_guidance(weather)
-                                )
-                                st.session_state["last_location"] = (
-                                    location.get("name", place_name.strip())
-                                )
-                            else:
-                                st.warning(
-                                    "Location not found. Check the spelling "
-                                    "or enter a nearby town."
-                                )
+            if st.button("Analyze photo", type="primary"):
+                result = predict_image(image)
 
-                        except requests.RequestException:
-                            st.warning(
-                                "Weather could not be loaded. The AI "
-                                "prediction will still be shown."
-                            )
+                if result is None:
+                    st.session_state.last_result = None
+                    st.error(
+                        "AI prediction is unavailable. Add a compatible "
+                        "trained model and class_names.json."
+                    )
+                    st.write(
+                        "The disease library below is for reference only "
+                        "and cannot diagnose this uploaded image."
+                    )
+                else:
+                    label = result["label"]
+                    confidence = result["confidence"]
 
-                    st.session_state["analysis_ready"] = True
+                    st.session_state.last_result = result
+                    st.subheader("Model prediction")
+                    st.write("Predicted class:", label)
+                    st.progress(max(0.0, min(1.0, confidence)))
+                    st.write(f"Model confidence: {confidence:.1%}")
 
-            except Exception as error:
-                st.error(
-                    "AI analysis failed. Check the model files and "
-                    "model input format."
+                    if confidence < 0.65:
+                        st.error(
+                            "Low confidence: do not rely on this prediction. "
+                            "Try a clearer photo and consult an expert."
+                        )
+                    else:
+                        st.warning(
+                            "This is a model prediction, not a confirmed "
+                            "diagnosis. Verify it before treatment."
+                        )
+
+                    st.session_state.history.append({
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "selected_crop": crop,
+                        "prediction": label,
+                        "confidence": round(confidence, 4),
+                        "location": location
+                    })
+
+                    # Show reference details only if a known name matches.
+                    matched = False
+                    for crop_name, entries in DISEASES.items():
+                        for disease_name, details in entries.items():
+                            if disease_name.lower() in label.lower():
+                                st.markdown("### Related reference information")
+                                st.write("**Crop reference:**", crop_name)
+                                st.write("**Disease:**", disease_name)
+                                st.write("**Symptoms:**", details[0])
+                                st.write("**Prevention:**", details[1])
+                                st.write("**Next step:**", details[2])
+                                matched = True
+                                break
+                        if matched:
+                            break
+
+                    if not matched:
+                        st.info(
+                            "No matching reference entry was found. "
+                            "Consult an agricultural expert."
+                        )
+
+        except Exception:
+            st.error("Unable to read this image. Please try another photo.")
+
+
+# =============== DISEASE LIBRARY ===============
+
+elif page == "Disease Library":
+    st.header("📚 Crop Disease Reference Library")
+    st.info(
+        "These entries describe common symptoms. They are not an exhaustive "
+        "database and do not confirm the disease in your plant."
+    )
+
+    selected_crop = st.selectbox("Choose crop", list(DISEASES))
+    disease = st.selectbox(
+        "Choose reference disease",
+        list(DISEASES[selected_crop])
+    )
+
+    symptoms, prevention, next_step = DISEASES[selected_crop][disease]
+
+    st.subheader(f"{selected_crop}: {disease}")
+    st.write("**Common symptoms:**", symptoms)
+    st.write("**Prevention:**", prevention)
+    st.write("**Recommended next step:**", next_step)
+    st.caption(
+        "Ask a local agricultural expert before applying pesticides or "
+        "other treatments. Always follow registered product labels."
+    )
+
+
+# =============== WEATHER MONITORING ===============
+
+elif page == "Weather":
+    st.header("🌦️ Local Weather Monitoring")
+    st.write(
+        "Weather conditions can help farmers decide when to inspect crops. "
+        "These readings do not diagnose disease."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        latitude = st.number_input(
+            "Latitude",
+            min_value=-90.0,
+            max_value=90.0,
+            value=16.5062,
+            format="%.4f"
+        )
+
+    with col2:
+        longitude = st.number_input(
+            "Longitude",
+            min_value=-180.0,
+            max_value=180.0,
+            value=80.6480,
+            format="%.4f"
+        )
+
+    if st.button("Fetch current weather"):
+        try:
+            response = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "current": (
+                        "temperature_2m,relative_humidity_2m,"
+                        "precipitation,wind_speed_10m"
+                    ),
+                    "timezone": "auto"
+                },
+                timeout=20
+            )
+            response.raise_for_status()
+            current = response.json()["current"]
+
+            temp = current.get("temperature_2m", 0)
+            humidity = current.get("relative_humidity_2m", 0)
+            rain = current.get("precipitation", 0)
+            wind = current.get("wind_speed_10m", 0)
+
+            a, b, c, d = st.columns(4)
+            a.metric("Temperature", f"{temp} °C")
+            b.metric("Humidity", f"{humidity}%")
+            c.metric("Precipitation", f"{rain} mm")
+            d.metric("Wind speed", f"{wind} km/h")
+
+            # Illustrative indicator only; not a validated disease model.
+            score = (
+                int(rain >= 10)
+                + int(humidity >= 85)
+                + int(wind >= 40)
+            )
+
+            if score >= 2:
+                st.warning(
+                    "Weather caution: inspect your crops and monitor "
+                    "for visible symptoms."
                 )
-                st.caption(f"Technical detail: {error}")
+            elif score == 1:
+                st.info(
+                    "Consider closer crop monitoring under changing conditions."
+                )
+            else:
+                st.success(
+                    "These simple indicators did not trigger a high caution. "
+                    "Continue normal crop monitoring."
+                )
+
+            st.caption(
+                "Weather from Open-Meteo. Thresholds are illustrative and "
+                "are not validated disease prediction thresholds."
+            )
+
+        except Exception:
+            st.error(
+                "Weather could not be fetched. Check your internet connection "
+                "and try again."
+            )
+
+
+# =============== HISTORY & REPORTS ===============
+
+elif page == "History & Reports":
+    st.header("📜 Leaf Check History")
+
+    if not st.session_state.history:
+        st.info("No saved checks in this session.")
+    else:
+        dataframe = pd.DataFrame(st.session_state.history)
+        st.dataframe(dataframe, use_container_width=True)
+
+        st.download_button(
+            "Download CSV report",
+            data=dataframe.to_csv(index=False).encode("utf-8"),
+            file_name="cropcare_history.csv",
+            mime="text/csv"
+        )
+
+        if st.button("Clear session history"):
+            st.session_state.history = []
+            st.rerun()
+
+    st.caption(
+        "History is session-only and may be lost when the session restarts. "
+        "Permanent history needs a database."
+    )
+
+
+# =============== ABOUT ===============
+
+elif page == "About":
+    st.header("ℹ️ About CropCare AI")
+    st.write(
+        "CropCare AI is a prototype designed to make crop-health education "
+        "more accessible through images, local-language messages and voice."
+    )
+
+    st.markdown("### Keypad-phone support")
+    st.write(
+        "Basic keypad phones usually cannot upload photos to this website. "
+        "To receive photos from those phones, add a compatible MMS or "
+        "messaging provider, a secure image-receiving backend, and a "
+        "configured SMS or voice-call service."
+    )
+
+    st.markdown("### Current limitations")
+    st.markdown("""
+    - Model accuracy depends on the training data and testing.
+    - The reference library covers selected diseases, not every crop disease.
+    - Translation and voice availability may vary by language and service.
+    - Weather indicators are not a validated disease forecast.
+    - Session history is not permanent storage.
+    """)
+
+
+# =============== VOICE ASSISTANCE ===============
+
+st.divider()
+st.header("🔊 Multilingual Voice Assistance")
+
+default_message = LANGUAGES[language]["message"]
+
+voice_text = st.text_area(
+    "Message to read aloud",
+    value=default_message
+)
+
+if st.button("Generate and play voice alert"):
+    try:
+        audio_buffer = io.BytesIO()
+        speech = gTTS(
+            text=voice_text,
+            lang=LANGUAGES[language]["tts"]
+        )
+        speech.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+
+        st.audio(audio_buffer, format="audio/mp3")
+        st.success("Voice message generated.")
 
     except Exception:
         st.error(
-            "Could not open this image. Please upload a valid JPG or PNG."
+            "Voice generation failed. Check the internet connection. "
+            "The speech service may not support every language."
         )
 
-
-# ==================================================
-# 13. RESULTS AND AUTOMATIC VOICE ALERT
-# ==================================================
-if st.session_state.get("analysis_ready", False):
-    label = st.session_state["last_label"]
-    confidence = st.session_state["last_confidence"]
-    guidance = st.session_state["last_guidance"]
-
-    weather = st.session_state.get("last_weather")
-    weather_advice = st.session_state.get("last_weather_advice", [])
-    location_name = st.session_state.get("last_location")
-
-    st.markdown("---")
-    st.header("📋 AI Analysis Result")
-
-    st.metric("Predicted leaf condition", label)
-    st.metric("Model confidence", f"{confidence:.1f}%")
-
-    if confidence < 60:
-        st.warning(
-            "Confidence is low. Try a clearer image and seek expert "
-            "confirmation before taking action."
-        )
-
-    st.subheader("🌿 Suggested Next Steps")
-    st.write(guidance)
-
-    if weather:
-        current = weather.get("current", {})
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric(
-                "Temperature",
-                f"{current.get('temperature_2m', 'N/A')} °C",
-            )
-
-        with col2:
-            st.metric(
-                "Humidity",
-                f"{current.get('relative_humidity_2m', 'N/A')}%",
-            )
-
-        with col3:
-            st.metric(
-                "Precipitation",
-                f"{current.get('precipitation', 'N/A')} mm",
-            )
-
-        with col4:
-            st.metric(
-                "Wind speed",
-                f"{current.get('wind_speed_10m', 'N/A')} km/h",
-            )
-
-        st.caption(
-            f"Weather location: {location_name}. "
-            f"Selected state / UT: {selected_state}."
-        )
-
-        st.subheader("🌤️ Weather-Based Precautions")
-
-        for item in weather_advice:
-            st.write(f"• {item}")
-
-    else:
-        st.caption(
-            "Enter a town or district in the sidebar and analyse the "
-            "leaf again to include local weather."
-        )
-
-    # Prepare a message specific to the current analysis.
-    spoken_text = (
-        f"CropCare AI result. Selected crop: {selected_crop}. "
-        f"Predicted condition: {label}. "
-        f"Confidence: {confidence:.1f} percent. "
-        f"Suggested next steps: {guidance}"
-    )
-
-    if weather_advice:
-        spoken_text += (
-            " Weather precautions: " + " ".join(weather_advice)
-        )
-
-    voice_signature = (
-        label,
-        round(confidence, 1),
-        selected_language,
-        selected_crop,
-        tuple(weather_advice),
-    )
-
-    st.subheader("🗣️ Voice Alert")
-
-    # Generate the alert automatically once per analysis/language.
-    if st.session_state.get("voice_signature") != voice_signature:
-        try:
-            with st.spinner("Preparing the voice alert..."):
-                audio_bytes, translated_text = make_voice_alert(
-                    spoken_text,
-                    selected_language,
-                )
-
-                st.session_state["voice_bytes"] = audio_bytes
-                st.session_state["voice_text"] = translated_text
-                st.session_state["voice_signature"] = voice_signature
-
-        except Exception as error:
-            st.session_state.pop("voice_bytes", None)
-            st.session_state.pop("voice_text", None)
-
-            st.warning(
-                "Automatic voice generation failed. Check your "
-                "internet connection."
-            )
-            st.caption(f"Technical detail: {error}")
-
-    if st.session_state.get("voice_bytes"):
-        st.audio(
-            st.session_state["voice_bytes"],
-            format="audio/mp3",
-            autoplay=True,
-        )
-
-        st.caption(
-            "Automatic playback is attempted. If your browser blocks it, "
-            "tap Play on the audio player."
-        )
-
-        with st.expander("Read the spoken alert"):
-            st.write(st.session_state.get("voice_text", ""))
-
-    # Manual fallback to regenerate audio if generation failed.
-    if st.button("🔊 Retry Voice Alert"):
-        try:
-            with st.spinner("Generating voice alert..."):
-                audio_bytes, translated_text = make_voice_alert(
-                    spoken_text,
-                    selected_language,
-                )
-
-                st.session_state["voice_bytes"] = audio_bytes
-                st.session_state["voice_text"] = translated_text
-                st.session_state["voice_signature"] = voice_signature
-
-            st.rerun()
-
-        except Exception as error:
-            st.error(
-                "Voice generation failed. Check your internet connection "
-                "and try again."
-            )
-            st.caption(f"Technical detail: {error}")
-
-
-# ==================================================
-# 14. FOOTER
-# ==================================================
-st.markdown("---")
-
+st.divider()
 st.caption(
-    "CropCare AI is an educational prototype. Predictions can be wrong "
-    "and do not replace expert diagnosis. Weather precautions are general "
-    "guidance, not a disease forecast."
+    "CropCare AI prototype • Verify disease predictions and treatment "
+    "decisions with qualified agricultural experts."
 )
+
+
+                            
+                        
+                    
