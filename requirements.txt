@@ -1,12 +1,12 @@
 
-streamlit>=1.42.0
-Pillow
-requests
+streamlit
+pillow
 numpy
-onnxruntime
-huggingface_hub
+pandas
+requests
 gTTS
-deep-translator
+tensorflow
+
 
 
 
