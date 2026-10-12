@@ -1,11 +1,9 @@
 
 streamlit
-pillow
-numpy
-pandas
-requests
+Pillow
 gTTS
-tensorflow
+deep-translator
+
 
 
 
